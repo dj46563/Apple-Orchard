@@ -64,12 +64,12 @@ public static class InputCompressor
         return bytes;
     }
     
-    public static Vector3 BytesToPosition(byte[] bytes)
+    public static Vector3 BytesToPosition(byte[] bytes, int offset = 0)
     {
         Vector3 position = Vector3.zero;
-        position.x = BitConverter.ToSingle(bytes, 0);
-        position.y = BitConverter.ToSingle(bytes, 4);
-        position.z = BitConverter.ToSingle(bytes, 8);
+        position.x = BitConverter.ToSingle(bytes, 0 + offset);
+        position.y = BitConverter.ToSingle(bytes, 4 + offset);
+        position.z = BitConverter.ToSingle(bytes, 8 + offset);
         return position;
     }
     public static Quaternion BytesToRotation(byte[] bytes, int offset = 0)

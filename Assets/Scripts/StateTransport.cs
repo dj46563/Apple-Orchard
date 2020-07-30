@@ -6,6 +6,7 @@ using System.Linq;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Formatters.Binary;
 using UnityEngine;
+using CircularBuffer;
 
 
 // Client sends inputs, server sends state
@@ -18,13 +19,16 @@ public class StateTransport : MonoBehaviour
     private Client _client;
 
     private ushort currentPacketId = 0;
-    private ushort latestProcessedInputId;
+    private ushort latestPacketRecevied;
     
     private static IFormatter formatter = new BinaryFormatter();
 
     private float _timer = 0;
     private readonly float InputSendRate = 10; // Inputs are sent 10 times a second
     private readonly float StateSendRate = 5; // States are sent 5 times a second
+
+    private CircularBuffer<StatePacket> statePacketBuffer = new CircularBuffer<StatePacket>(Constants.StateBufferSize);
+    private float slerpT = 0;
 
     private void Awake()
     {
@@ -47,11 +51,21 @@ public class StateTransport : MonoBehaviour
     private void StateReceived(byte[] data)
     {
         StatePacket statePacket = StatePacket.Deserialize(data);
-        cube.transform.position = statePacket.position;
-        cube.transform.rotation = statePacket.rotation;
+        ushort id = statePacket.id;
+
+        if (latestPacketRecevied < id)
+        {
+            latestPacketRecevied = id;
+            statePacketBuffer.PushFront(statePacket);
+            slerpT = 0;
+            
+            //cube.transform.position = statePacket.position;
+            cube.transform.rotation = statePacket.rotation;
+        }
+        
     }
 
-    private void Update()
+    private void LateUpdate()
     {
         _timer += Time.deltaTime;
         if (_client != null && _client.IsConnected)
@@ -72,13 +86,29 @@ public class StateTransport : MonoBehaviour
         }
     }
 
+    private void Update()
+    {
+        if (_client != null && _client.IsConnected)
+        {
+            if (statePacketBuffer.Size >= 2)
+            {
+                slerpT += Time.deltaTime * StateSendRate;
+                
+                StatePacket recent = statePacketBuffer.Back();
+                StatePacket previous = statePacketBuffer.Front();
+
+                cube.transform.position = Vector3.Slerp(recent.position, previous.position, slerpT);
+            }
+        }
+    }
+
     private void InputReceived(byte[] data)
     {
         InputPacket inputPacket = InputPacket.Deserialize(data);
 
-        if (inputPacket.id > latestProcessedInputId)
+        if (inputPacket.id > latestPacketRecevied)
         {
-            latestProcessedInputId = inputPacket.id;
+            latestPacketRecevied = inputPacket.id;
             
             InputCompressor.Inputs inputs = InputCompressor.DecompressInput(inputPacket.inputByte);
 
@@ -108,6 +138,7 @@ public class StateTransport : MonoBehaviour
     public void SendState()
     {
         StatePacket statePacket;
+        statePacket.id = currentPacketId++;
         statePacket.position = cube.transform.position;
         statePacket.rotation = cube.transform.rotation;
         
@@ -116,21 +147,24 @@ public class StateTransport : MonoBehaviour
 
     private struct StatePacket : IByteSerializable
     {
+        public ushort id;
         public Vector3 position;
         public Quaternion rotation;
         
         public byte[] Serialize()
         {
-            byte[] bytes = new byte[28];
-            Buffer.BlockCopy(InputCompressor.PositionToBytes(position), 0, bytes, 0, 12);
-            Buffer.BlockCopy(InputCompressor.RotationToBytes(rotation), 0, bytes, 12, 16);
+            byte[] bytes = new byte[30];
+            Buffer.BlockCopy(BitConverter.GetBytes(id), 0, bytes, 0, 2);
+            Buffer.BlockCopy(InputCompressor.PositionToBytes(position), 0, bytes, 2, 12);
+            Buffer.BlockCopy(InputCompressor.RotationToBytes(rotation), 0, bytes, 14, 16);
             return bytes;
         }
         public static StatePacket Deserialize(byte[] data)
         {
             StatePacket returnPacket;
-            returnPacket.position = InputCompressor.BytesToPosition(data);
-            returnPacket.rotation = InputCompressor.BytesToRotation(data, 12);
+            returnPacket.id = BitConverter.ToUInt16(data, 0);
+            returnPacket.position = InputCompressor.BytesToPosition(data, 2);
+            returnPacket.rotation = InputCompressor.BytesToRotation(data, 14);
             return returnPacket;
         }
     }
