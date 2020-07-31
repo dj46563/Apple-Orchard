@@ -8,7 +8,6 @@ using System.Runtime.Serialization.Formatters.Binary;
 using UnityEngine;
 using CircularBuffer;
 
-
 // Client sends inputs, server sends state
 // No Delta compression
 public class StateTransport : MonoBehaviour
@@ -28,7 +27,7 @@ public class StateTransport : MonoBehaviour
     private readonly float StateSendRate = 5; // States are sent 5 times a second
 
     private CircularBuffer<StatePacket> statePacketBuffer = new CircularBuffer<StatePacket>(Constants.StateBufferSize);
-    private float slerpT = 0;
+    private float lerpT = 0;
 
     private void Awake()
     {
@@ -57,10 +56,7 @@ public class StateTransport : MonoBehaviour
         {
             latestPacketRecevied = id;
             statePacketBuffer.PushFront(statePacket);
-            slerpT = 0;
-            
-            //cube.transform.position = statePacket.position;
-            cube.transform.rotation = statePacket.rotation;
+            lerpT = 0;
         }
         
     }
@@ -92,12 +88,12 @@ public class StateTransport : MonoBehaviour
         {
             if (statePacketBuffer.Size >= 2)
             {
-                slerpT += Time.deltaTime * StateSendRate;
+                lerpT += Time.deltaTime * StateSendRate;
                 
-                StatePacket recent = statePacketBuffer.Back();
-                StatePacket previous = statePacketBuffer.Front();
+                StatePacket recent = statePacketBuffer.Front();
+                StatePacket previous = statePacketBuffer[1];
 
-                cube.transform.position = Vector3.Slerp(recent.position, previous.position, slerpT);
+                cube.transform.position = Vector3.Lerp(previous.entities[0].position, recent.entities[0].position, lerpT);
             }
         }
     }
@@ -139,32 +135,35 @@ public class StateTransport : MonoBehaviour
     {
         StatePacket statePacket;
         statePacket.id = currentPacketId++;
-        statePacket.position = cube.transform.position;
-        statePacket.rotation = cube.transform.rotation;
+        EntityBitConverter.Entity[] entities = new EntityBitConverter.Entity[1];
         
-        _server.BroadcastBytes(SerializeStruct(statePacket));
+        entities[0].id = 1;
+        entities[0].position = cube.transform.position;
+        entities[0].rotation = cube.transform.rotation;
+
+        statePacket.entities = entities;
+        
+        _server.BroadcastBytes(statePacket.Serialize());
     }
 
     private struct StatePacket : IByteSerializable
     {
         public ushort id;
-        public Vector3 position;
-        public Quaternion rotation;
+        public EntityBitConverter.Entity[] entities;
         
         public byte[] Serialize()
         {
-            byte[] bytes = new byte[30];
+            byte[] entityBytes = EntityBitConverter.EntitiesToBytes(entities);
+            byte[] bytes = new byte[2 + entityBytes.Length];
             Buffer.BlockCopy(BitConverter.GetBytes(id), 0, bytes, 0, 2);
-            Buffer.BlockCopy(InputCompressor.PositionToBytes(position), 0, bytes, 2, 12);
-            Buffer.BlockCopy(InputCompressor.RotationToBytes(rotation), 0, bytes, 14, 16);
+            Buffer.BlockCopy(entityBytes, 0, bytes, 2, entityBytes.Length);
             return bytes;
         }
         public static StatePacket Deserialize(byte[] data)
         {
             StatePacket returnPacket;
             returnPacket.id = BitConverter.ToUInt16(data, 0);
-            returnPacket.position = InputCompressor.BytesToPosition(data, 2);
-            returnPacket.rotation = InputCompressor.BytesToRotation(data, 14);
+            returnPacket.entities = EntityBitConverter.BytesToEntites(data, 2);
             return returnPacket;
         }
     }

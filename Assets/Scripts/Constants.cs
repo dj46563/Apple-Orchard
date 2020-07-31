@@ -10,5 +10,5 @@ public static class Constants
     public static readonly string DefaultHost = "127.0.0.1";
     public static readonly ushort DefaultPort = 12400;
     public static readonly ushort ChannelLimit = 2;
-    public static readonly int StateBufferSize = 2;
+    public static readonly int StateBufferSize = 5;
 }
