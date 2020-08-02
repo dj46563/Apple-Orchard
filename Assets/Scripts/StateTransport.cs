@@ -98,7 +98,7 @@ public class StateTransport : MonoBehaviour
         }
     }
 
-    private void InputReceived(byte[] data)
+    private void InputReceived(byte[] data, uint peerId)
     {
         InputPacket inputPacket = InputPacket.Deserialize(data);
 
