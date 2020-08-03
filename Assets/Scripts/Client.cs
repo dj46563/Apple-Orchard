@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
 using ENet;
+using K4os.Compression.LZ4;
 using EventType = ENet.EventType;
 
 public class Client
@@ -32,8 +33,10 @@ public class Client
 
     public void SendBytes(byte[] data)
     {
+        var encoded = LZ4Pickler.Pickle(data);
+        
         Packet packet = default(Packet);
-        packet.Create(data);
+        packet.Create(encoded);
         _peer.Send(0, ref packet);
     }
 
@@ -67,7 +70,8 @@ public class Client
                 case EventType.Receive:
                     byte[] data = new byte[_netEvent.Packet.Length];
                     _netEvent.Packet.CopyTo(data);
-                    PacketReceived?.Invoke(data);
+                    var decoded = LZ4Pickler.Unpickle(data);
+                    PacketReceived?.Invoke(decoded);
                     break;
                 case EventType.Timeout:
                     TimedOut?.Invoke();
@@ -80,10 +84,11 @@ public class Client
         }
     }
 
-    ~Client()
+    public void Disconnect()
     {
         _client.Flush();
         _peer.DisconnectNow(0);
+        //while (_peer.State == PeerState.Disconnecting && _peer.State != PeerState.Disconnected) { }
         _client.Dispose();
     }
 }

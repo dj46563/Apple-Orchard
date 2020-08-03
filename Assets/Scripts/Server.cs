@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.Numerics;
 using ENet;
 using UnityEngine;
+using K4os.Compression.LZ4;
+using K4os.Compression.LZ4.Encoders;
 using EventType = ENet.EventType;
 
 public class Server
@@ -25,20 +27,30 @@ public class Server
         _address.Port = port;
         _server.Create(_address, Constants.DefaultPeerLimit, Constants.ChannelLimit);
         
-        Debug.Log("Server created on: " + host + ", Port: " + port);
+        Debug.Log("Server created on port: " + port);
     }
 
-    public void BroadcastBytes(byte[] data)
+    public int BroadcastBytes(byte[] data)
     {
+        var encoded = LZ4Pickler.Pickle(data);
+        
         Packet packet = default(Packet);
-        packet.Create(data);
+        packet.Create(encoded);
         _server.Broadcast(0, ref packet);
+        
+        return encoded.Length;
     }
-    public void BroadcastBytes(byte[] data, uint peerId)
+    public int BroadcastBytes(byte[] data, uint peerId)
     {
+        var encoded = LZ4Pickler.Pickle(data);
+        
         Packet packet = default(Packet);
-        packet.Create(data);
+        packet.Create(encoded);
         _server.Broadcast(0, ref packet, new Peer[] { _peerDict[peerId] });
+        
+        Debug.Log("Sent " + encoded.Length + " bytes");
+        
+        return encoded.Length;
     }
 
     public void PollEvents()
@@ -72,7 +84,8 @@ public class Server
                 case EventType.Receive:
                     byte[] buffer = new byte[_netEvent.Packet.Length];
                     _netEvent.Packet.CopyTo(buffer);
-                    PacketReceived?.Invoke(buffer, _netEvent.Peer.ID);
+                    var decoded = LZ4Pickler.Unpickle(buffer);
+                    PacketReceived?.Invoke(decoded, _netEvent.Peer.ID);
                     break;
                 case EventType.Timeout:
                     Debug.Log("Client timed out - IP: " + _netEvent.Peer.IP);
@@ -83,7 +96,7 @@ public class Server
         }
     }
 
-    ~Server()
+    public void Disconnect()
     {
         _server.Flush();
         _server.Dispose();

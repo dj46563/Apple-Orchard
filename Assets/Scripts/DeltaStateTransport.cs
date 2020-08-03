@@ -9,7 +9,7 @@ public class DeltaStateTransport : MonoBehaviour
 {
     private readonly float InputSendRate = 10;
     private readonly float StateSendRate = 5;
-    private readonly int CircularBufferSize = 5;
+    private static readonly int CircularBufferSize = 10;
 
     public Server Server { get; private set; }
     public  Client Client { get; private set; }
@@ -18,7 +18,7 @@ public class DeltaStateTransport : MonoBehaviour
     private static ushort latestPacketReceived;
 
     // Buffer of 
-    private static CircularBuffer<BufferedState> _statePackets = new CircularBuffer<BufferedState>(10);
+    private static CircularBuffer<BufferedState> _statePackets = new CircularBuffer<BufferedState>(CircularBufferSize);
 
     // Server specific
     // List is used because we need to update all entries every frame anyways, and it has fast adding and removing
@@ -33,12 +33,14 @@ public class DeltaStateTransport : MonoBehaviour
     private DiffState previousDiff;
     private DiffState latestDiff;
     private float lerpT = 0;
-
+    
     // DEBUG CODE
     private Transform cubeTransform;
+    private Transform sphereTransform;
     private void Start()
     {
         cubeTransform = GameObject.Find("Cube").transform;
+        sphereTransform = GameObject.Find("Sphere").transform;
         
         BufferedState initialState;
         initialState.id = 0;
@@ -85,12 +87,13 @@ public class DeltaStateTransport : MonoBehaviour
     private void ClientOnPacketReceived(byte[] data)
     {
         previousDiff = latestDiff;
+
+        byte[] currentState;
         
-        StatePacket statePacket = StatePacket.Deserialize(data);
+        StatePacket statePacket = StatePacket.Deserialize(data, out currentState);
         BufferedState bufferedState;
         bufferedState.id = statePacket.id;
-        byte[] diffDataPortion = data.AsSpan().Slice(4).ToArray(); // Terrible
-        bufferedState.diffStateBytes = diffDataPortion;
+        bufferedState.diffStateBytes = currentState;
         _statePackets.PushFront(bufferedState);
 
         latestDiff = statePacket.diffState;
@@ -114,12 +117,18 @@ public class DeltaStateTransport : MonoBehaviour
             if (_statePackets.Size >= 3) // First one doesn't count, it is the base zero'd state
             {
                 lerpT += Time.deltaTime * StateSendRate;
-                foreach (NetworkEntity entity in latestDiff.entities)
-                {
-                    NetworkEntity previousEntity = previousDiff.entities.Find(x => x.entityId == entity.entityId);
-                    cubeTransform.position = Vector3.Lerp(previousEntity.position, entity.position, lerpT);
-                    cubeTransform.rotation = Quaternion.Slerp(previousEntity.rotation, entity.rotation, lerpT);
-                }
+
+                cubeTransform.position = latestDiff.entities[0].position;
+                cubeTransform.rotation = latestDiff.entities[0].rotation;
+                sphereTransform.position = latestDiff.entities[1].position;
+                sphereTransform.rotation = latestDiff.entities[1].rotation;
+                
+                // foreach (NetworkEntity entity in latestDiff.entities)
+                // {
+                //     NetworkEntity previousEntity = previousDiff.entities.Find(x => x.entityId == entity.entityId);
+                //     cubeTransform.position = Vector3.Lerp(previousEntity.position, entity.position, lerpT);
+                //     cubeTransform.rotation = Quaternion.Slerp(previousEntity.rotation, entity.rotation, lerpT);
+                // }
             }
         }
     }
@@ -147,13 +156,18 @@ public class DeltaStateTransport : MonoBehaviour
                 cubeEntity.position = cubeTransform.position;
                 cubeEntity.rotation = cubeTransform.rotation;
                 cubeEntity.entityId = 1;
-                currentState.diffState.entities = new List<NetworkEntity>() { cubeEntity };
+                NetworkEntity sphereEntity;
+                sphereEntity.position = sphereTransform.position;
+                sphereEntity.rotation = sphereTransform.rotation;
+                sphereEntity.entityId = 2;
+                currentState.diffState.entities = new List<NetworkEntity>() { cubeEntity, sphereEntity };
                 // END DEBUG CODE
                 
                 // Note: serialize expects the latest packet to be in the ring buffer before serialization occurs
                 BufferedState bufferedState;
                 bufferedState.id = currentPacketId;
-                bufferedState.diffStateBytes = currentState.diffState.Serialize(currentState.baseId);
+                // Store the absolute state in the ring buffer, not a delta state, hence the 0
+                bufferedState.diffStateBytes = currentState.diffState.Serialize(0);
                 _statePackets.PushFront(bufferedState);
                 
                 // Create a delta packet for each peer
@@ -162,7 +176,8 @@ public class DeltaStateTransport : MonoBehaviour
                     currentState.baseId = peer.Value;
 
                     uint peerId = peer.Key;
-                    Server.BroadcastBytes(currentState.Serialize(), peerId);
+                    byte[] data = currentState.Serialize();
+                    Server.BroadcastBytes(data, peerId);
                 }
                 
                 currentPacketId++;
@@ -180,6 +195,12 @@ public class DeltaStateTransport : MonoBehaviour
             }
             
         }
+    }
+
+    private void OnApplicationQuit()
+    {
+        Server?.Disconnect();
+        Client?.Disconnect();
     }
 
     private struct BufferedState
@@ -211,12 +232,12 @@ public class DeltaStateTransport : MonoBehaviour
             return bytes;
         }
 
-        public static StatePacket Deserialize(byte[] bytes)
+        public static StatePacket Deserialize(byte[] bytes, out byte[] deltaApplied)
         {
             StatePacket statePacket;
             statePacket.id = BitConverter.ToUInt16(bytes, 0);
             statePacket.baseId = BitConverter.ToUInt16(bytes, 2);
-            statePacket.diffState = DiffState.Deserialize(bytes, statePacket.baseId, 4);
+            statePacket.diffState = DiffState.Deserialize(bytes, statePacket.baseId, 4, out deltaApplied);
 
             return statePacket;
         }
@@ -231,11 +252,11 @@ public class DeltaStateTransport : MonoBehaviour
         {
             byte[] delta;
             byte[] thisDiffState = NetworkEntity.Serialize(entities);
-            // If base is 1, then there is base to create a delta
+            // If base is 0, then there is base to create a delta
             if (baseId != 0 && (currentPacketId - baseId) < _statePackets.Capacity)
             {
                 // Do some math to figure out which position has the base state we want, since server is guaranteed to have all states
-                byte[] baseDiffState = _statePackets[currentPacketId - baseId - 1].diffStateBytes;
+                byte[] baseDiffState = _statePackets[currentPacketId - baseId].diffStateBytes;
                 delta = XORBytes(baseDiffState, thisDiffState);
             }
             else
@@ -245,12 +266,13 @@ public class DeltaStateTransport : MonoBehaviour
             return delta;
         }
 
-        public static DiffState Deserialize(byte[] bytes, ushort baseId, int offset)
+        public static DiffState Deserialize(byte[] bytes, ushort baseId, int offset, out byte[] deltaApplied)
         {
             DiffState diffState;
             byte[] offsetBytes = bytes.AsSpan().Slice(offset).ToArray();
 
-            byte[] deltaApplied = null;
+            deltaApplied = null;
+            
             // Only xor with a base state if the offset isn't 0, 0 means no actual base state and there is no diff
             if (baseId != 0)
             {
@@ -279,7 +301,7 @@ public class DeltaStateTransport : MonoBehaviour
                 throw new Exception("BaseID " + baseId + " does not exist in buffer");
             }
         }
-
+        
         private static byte[] XORBytes(byte[] arr1, byte[] arr2)
         {
             byte[] delta = new byte[arr2.Length];
@@ -293,7 +315,7 @@ public class DeltaStateTransport : MonoBehaviour
             return delta;
         }
     }
-    
+
     private struct InputPacket
     {
         public ushort id;
