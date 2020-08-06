@@ -17,7 +17,7 @@ public struct NetworkEntity
         byte[] bytes = new byte[2 + EntitySize * count];
         
         Buffer.BlockCopy(BitConverter.GetBytes(count), 0, bytes, 0, 2);
-        
+
         int i = 0;
         foreach (NetworkEntity entity in entities) // Use a foreach in-case a O(1) index-able collection is not given
         {

@@ -33,15 +33,12 @@ public class DeltaStateTransport : MonoBehaviour
     private DiffState previousDiff;
     private DiffState latestDiff;
     private float lerpT = 0;
-    
-    // DEBUG CODE
-    private Transform cubeTransform;
-    private Transform sphereTransform;
+
+    private NetworkEntity[] PlayerEntities = new NetworkEntity[30];
+    GameObject[] playerObjects = new GameObject[30];
+    public GameObject PlayerPrefab;
     private void Start()
     {
-        cubeTransform = GameObject.Find("Cube").transform;
-        sphereTransform = GameObject.Find("Sphere").transform;
-        
         BufferedState initialState;
         initialState.id = 0;
         initialState.diffStateBytes = new byte[1] {0};
@@ -71,7 +68,8 @@ public class DeltaStateTransport : MonoBehaviour
         int horizontal = Convert.ToSByte(inputs.D) - Convert.ToSByte(inputs.A);
         int vertical = Convert.ToSByte(inputs.W) - Convert.ToSByte(inputs.S);
         
-        cubeTransform.position += new Vector3(horizontal, 0, vertical) * (1 / InputSendRate);
+        PlayerEntities[peerId].position += new Vector3(horizontal, 0, vertical) * (1 / InputSendRate);
+        playerObjects[peerId].transform.position = PlayerEntities[peerId].position;
     }
 
     public void StartClient()
@@ -108,6 +106,15 @@ public class DeltaStateTransport : MonoBehaviour
     private void ServerOnPeerConnected(uint peerId)
     {
         _peerAck[peerId] = 0;
+
+        // Create new player
+        NetworkEntity newEntity;
+        newEntity.entityId = (ushort)peerId;
+        newEntity.position = Vector3.zero;
+        newEntity.rotation = Quaternion.identity;
+        PlayerEntities[newEntity.entityId] = newEntity;
+        // Instantiate player object
+        playerObjects[peerId] = Instantiate(PlayerPrefab);
     }
 
     private void Update()
@@ -118,10 +125,19 @@ public class DeltaStateTransport : MonoBehaviour
             {
                 lerpT += Time.deltaTime * StateSendRate;
 
-                cubeTransform.position = latestDiff.entities[0].position;
-                cubeTransform.rotation = latestDiff.entities[0].rotation;
-                sphereTransform.position = latestDiff.entities[1].position;
-                sphereTransform.rotation = latestDiff.entities[1].rotation;
+                foreach (var entity in latestDiff.entities)
+                {
+                    if (entity.rotation.x == 0f && entity.rotation.y == 0f && entity.rotation.z == 0f && entity.rotation.w == 0f)
+                        continue;
+                        
+                    if (playerObjects[entity.entityId] == null)
+                        playerObjects[entity.entityId] = Instantiate(PlayerPrefab, entity.position, entity.rotation);
+                    else
+                    {
+                        playerObjects[entity.entityId].transform.position = entity.position;
+                        playerObjects[entity.entityId].transform.rotation = entity.rotation;
+                    }    
+                }
                 
                 // foreach (NetworkEntity entity in latestDiff.entities)
                 // {
@@ -151,17 +167,7 @@ public class DeltaStateTransport : MonoBehaviour
                 currentState.id = currentPacketId;
                 currentState.baseId = (ushort)(currentPacketId - 1); // can't be negative because currentPacketId starts at 1
                 
-                // DEBUG CODE
-                NetworkEntity cubeEntity;
-                cubeEntity.position = cubeTransform.position;
-                cubeEntity.rotation = cubeTransform.rotation;
-                cubeEntity.entityId = 1;
-                NetworkEntity sphereEntity;
-                sphereEntity.position = sphereTransform.position;
-                sphereEntity.rotation = sphereTransform.rotation;
-                sphereEntity.entityId = 2;
-                currentState.diffState.entities = new List<NetworkEntity>() { cubeEntity, sphereEntity };
-                // END DEBUG CODE
+                currentState.diffState.entities = PlayerEntities;
                 
                 // Note: serialize expects the latest packet to be in the ring buffer before serialization occurs
                 BufferedState bufferedState;
@@ -245,7 +251,7 @@ public class DeltaStateTransport : MonoBehaviour
 
     private struct DiffState
     {
-        public List<NetworkEntity> entities;
+        public NetworkEntity[] entities;
 
         // Created a delta serialization from a previous state with id baseId
         public byte[] Serialize(ushort baseId)
@@ -293,7 +299,7 @@ public class DeltaStateTransport : MonoBehaviour
 
             if (deltaApplied != null)
             {
-                diffState.entities = NetworkEntity.Deserialize(deltaApplied).ToList();
+                diffState.entities = NetworkEntity.Deserialize(deltaApplied).ToArray();
                 return diffState;
             }
             else

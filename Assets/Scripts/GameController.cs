@@ -6,6 +6,8 @@ using UnityEngine;
 
 public class GameController : MonoBehaviour
 {
+    public GameObject PlayerPrefab;
+    
     private SceneController _sceneController;
     private DeltaStateTransport _deltaStateTransport;
     
@@ -16,6 +18,7 @@ public class GameController : MonoBehaviour
         MenuController.OnConnectPressed += Connect;
 
         _deltaStateTransport = gameObject.AddComponent<DeltaStateTransport>();
+        _deltaStateTransport.PlayerPrefab = PlayerPrefab;
         
         if (Application.isBatchMode)
         {
