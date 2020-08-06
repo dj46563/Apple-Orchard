@@ -34,7 +34,7 @@ public class DeltaStateTransport : MonoBehaviour
     private DiffState latestDiff;
     private float lerpT = 0;
 
-    private NetworkEntity[] PlayerEntities = new NetworkEntity[30];
+    private List<NetworkEntity> PlayerEntities = new List<NetworkEntity>();
     GameObject[] playerObjects = new GameObject[30];
     public GameObject PlayerPrefab;
     private void Start()
@@ -68,8 +68,15 @@ public class DeltaStateTransport : MonoBehaviour
         int horizontal = Convert.ToSByte(inputs.D) - Convert.ToSByte(inputs.A);
         int vertical = Convert.ToSByte(inputs.W) - Convert.ToSByte(inputs.S);
         
-        PlayerEntities[peerId].position += new Vector3(horizontal, 0, vertical) * (1 / InputSendRate);
-        playerObjects[peerId].transform.position = PlayerEntities[peerId].position;
+        // Update the object's position
+        playerObjects[peerId].transform.position += new Vector3(horizontal, 0, vertical) * (1 / InputSendRate);
+        // Update the network entity, so that the new position and rotation will be included in the next packet
+        int index = PlayerEntities.FindIndex(x => x.entityId == peerId);
+        NetworkEntity updatedEntity;
+        updatedEntity.entityId = (ushort)peerId;
+        updatedEntity.position = playerObjects[peerId].transform.position;
+        updatedEntity.rotation = playerObjects[peerId].transform.rotation;
+        PlayerEntities[index] = updatedEntity;
     }
 
     public void StartClient()
@@ -106,15 +113,15 @@ public class DeltaStateTransport : MonoBehaviour
     private void ServerOnPeerConnected(uint peerId)
     {
         _peerAck[peerId] = 0;
-
+        
+        // Instantiate player object
+        playerObjects[peerId] = Instantiate(PlayerPrefab);
         // Create new player
         NetworkEntity newEntity;
         newEntity.entityId = (ushort)peerId;
-        newEntity.position = Vector3.zero;
-        newEntity.rotation = Quaternion.identity;
-        PlayerEntities[newEntity.entityId] = newEntity;
-        // Instantiate player object
-        playerObjects[peerId] = Instantiate(PlayerPrefab);
+        newEntity.position = playerObjects[peerId].transform.position;
+        newEntity.rotation = playerObjects[peerId].transform.rotation;
+        PlayerEntities.Add(newEntity);
     }
 
     private void Update()
@@ -127,6 +134,8 @@ public class DeltaStateTransport : MonoBehaviour
 
                 foreach (var entity in latestDiff.entities)
                 {
+                    NetworkEntity previousEntity = previousDiff.entities.Find(x => x.entityId == entity.entityId);
+                    
                     if (entity.rotation.x == 0f && entity.rotation.y == 0f && entity.rotation.z == 0f && entity.rotation.w == 0f)
                         continue;
                         
@@ -134,17 +143,10 @@ public class DeltaStateTransport : MonoBehaviour
                         playerObjects[entity.entityId] = Instantiate(PlayerPrefab, entity.position, entity.rotation);
                     else
                     {
-                        playerObjects[entity.entityId].transform.position = entity.position;
-                        playerObjects[entity.entityId].transform.rotation = entity.rotation;
+                        playerObjects[entity.entityId].transform.position = Vector3.Lerp(previousEntity.position, entity.position, lerpT);
+                        playerObjects[entity.entityId].transform.rotation = Quaternion.Slerp(previousEntity.rotation, entity.rotation, lerpT);
                     }    
                 }
-                
-                // foreach (NetworkEntity entity in latestDiff.entities)
-                // {
-                //     NetworkEntity previousEntity = previousDiff.entities.Find(x => x.entityId == entity.entityId);
-                //     cubeTransform.position = Vector3.Lerp(previousEntity.position, entity.position, lerpT);
-                //     cubeTransform.rotation = Quaternion.Slerp(previousEntity.rotation, entity.rotation, lerpT);
-                // }
             }
         }
     }
@@ -251,7 +253,7 @@ public class DeltaStateTransport : MonoBehaviour
 
     private struct DiffState
     {
-        public NetworkEntity[] entities;
+        public List<NetworkEntity> entities;
 
         // Created a delta serialization from a previous state with id baseId
         public byte[] Serialize(ushort baseId)
@@ -299,7 +301,7 @@ public class DeltaStateTransport : MonoBehaviour
 
             if (deltaApplied != null)
             {
-                diffState.entities = NetworkEntity.Deserialize(deltaApplied).ToArray();
+                diffState.entities = NetworkEntity.Deserialize(deltaApplied).ToList();
                 return diffState;
             }
             else
