@@ -15,6 +15,7 @@ public class Client
     public event Action<byte[]> PacketReceived;
 
     public bool IsConnected { get; private set; } = false;
+    public uint PeerId { get; private set; }
     
     private Host _client = new Host();
     private ENet.Event _netEvent;
@@ -29,14 +30,14 @@ public class Client
         _address.SetHost(host);
         _client.Create();
         _peer = _client.Connect(_address, Constants.ChannelLimit);
+
+        PeerId = _peer.ID;
     }
 
     public void SendBytes(byte[] data)
     {
-        var encoded = LZ4Pickler.Pickle(data);
-        
         Packet packet = default(Packet);
-        packet.Create(encoded);
+        packet.Create(data);
         _peer.Send(0, ref packet);
     }
 
@@ -70,8 +71,7 @@ public class Client
                 case EventType.Receive:
                     byte[] data = new byte[_netEvent.Packet.Length];
                     _netEvent.Packet.CopyTo(data);
-                    var decoded = LZ4Pickler.Unpickle(data);
-                    PacketReceived?.Invoke(decoded);
+                    PacketReceived?.Invoke(data);
                     break;
                 case EventType.Timeout:
                     TimedOut?.Invoke();

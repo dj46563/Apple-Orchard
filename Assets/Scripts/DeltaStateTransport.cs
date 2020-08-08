@@ -185,7 +185,7 @@ public class DeltaStateTransport : MonoBehaviour
 
                     uint peerId = peer.Key;
                     byte[] data = currentState.Serialize();
-                    Server.BroadcastBytes(data, peerId);
+                    Server.BroadcastBytesTo(data, peerId);
                 }
                 
                 currentPacketId++;

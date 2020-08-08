@@ -32,25 +32,32 @@ public class Server
 
     public int BroadcastBytes(byte[] data)
     {
-        var encoded = LZ4Pickler.Pickle(data);
-        
         Packet packet = default(Packet);
-        packet.Create(encoded);
+        packet.Create(data);
         _server.Broadcast(0, ref packet);
         
-        return encoded.Length;
-    }
-    public int BroadcastBytes(byte[] data, uint peerId)
-    {
-        var encoded = LZ4Pickler.Pickle(data);
+        Debug.Log("All. Raw: " + data.Length);
         
+        return data.Length;
+    }
+    public int BroadcastBytesTo(byte[] data, uint peerId)
+    {
         Packet packet = default(Packet);
-        packet.Create(encoded);
+        packet.Create(data);
         _server.Broadcast(0, ref packet, new Peer[] { _peerDict[peerId] });
         
-        Debug.Log("Sent " + encoded.Length + " bytes");
+        Debug.Log("Individual. Raw: " + data.Length);
         
-        return encoded.Length;
+        return data.Length;
+    }
+    
+    public int BroadcastBytesToEveryoneExcept(byte[] data, uint peerId)
+    {
+        Packet packet = default(Packet);
+        packet.Create(data);
+        _server.Broadcast(0, ref packet, _peerDict[peerId]);
+        
+        return data.Length;
     }
 
     public void PollEvents()
@@ -72,20 +79,19 @@ public class Server
                 case EventType.None:
                     break;
                 case EventType.Connect:
-                    PeerConnected?.Invoke(_netEvent.Peer.ID);
                     _peerDict[_netEvent.Peer.ID] = _netEvent.Peer;
+                    PeerConnected?.Invoke(_netEvent.Peer.ID);
                     Debug.Log("Client connected - ID: " + _netEvent.Peer.ID + ", IP: " + _netEvent.Peer.IP);
                     break;
                 case EventType.Disconnect:
-                    PeerDisconncted?.Invoke(_netEvent.Peer.ID);
                     _peerDict.Remove(_netEvent.Peer.ID);
+                    PeerDisconncted?.Invoke(_netEvent.Peer.ID);
                     Debug.Log("Client disconnected - ID: " + _netEvent.Peer.ID + ", IP: " + _netEvent.Peer.IP);
                     break;
                 case EventType.Receive:
-                    byte[] buffer = new byte[_netEvent.Packet.Length];
-                    _netEvent.Packet.CopyTo(buffer);
-                    var decoded = LZ4Pickler.Unpickle(buffer);
-                    PacketReceived?.Invoke(decoded, _netEvent.Peer.ID);
+                    byte[] data = new byte[_netEvent.Packet.Length];
+                    _netEvent.Packet.CopyTo(data);
+                    PacketReceived?.Invoke(data, _netEvent.Peer.ID);
                     break;
                 case EventType.Timeout:
                     Debug.Log("Client timed out - IP: " + _netEvent.Peer.IP);

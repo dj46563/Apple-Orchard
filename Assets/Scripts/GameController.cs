@@ -9,7 +9,7 @@ public class GameController : MonoBehaviour
     public GameObject PlayerPrefab;
     
     private SceneController _sceneController;
-    private DeltaStateTransport _deltaStateTransport;
+    private DirtyStateTransport _transport;
     
     // Start is called before the first frame update
     void Awake()
@@ -17,8 +17,8 @@ public class GameController : MonoBehaviour
         MenuController.OnHostPressed += Host;
         MenuController.OnConnectPressed += Connect;
 
-        _deltaStateTransport = gameObject.AddComponent<DeltaStateTransport>();
-        _deltaStateTransport.PlayerPrefab = PlayerPrefab;
+        _transport = gameObject.AddComponent<DirtyStateTransport>();
+        _transport.PlayerPrefab = PlayerPrefab;
         
         if (Application.isBatchMode)
         {
@@ -39,13 +39,13 @@ public class GameController : MonoBehaviour
 
     private void Connect()
     {
-        _deltaStateTransport.StartClient();
-        _deltaStateTransport.Client.Connected += _sceneController.UnloadMenuUI;
+        _transport.StartClient();
+        _transport.Client.Connected += _sceneController.UnloadMenuUI;
     }
 
     private void Host()
     {
-        _deltaStateTransport.StartServer();
+        _transport.StartServer();
         _sceneController.UnloadMenuUI();
     }
 }

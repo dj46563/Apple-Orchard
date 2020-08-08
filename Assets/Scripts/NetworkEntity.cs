@@ -24,14 +24,14 @@ public struct NetworkEntity
             Buffer.BlockCopy(BitConverter.GetBytes(entity.entityId), 0, bytes, 2 + (i * EntitySize) + 0, 2);
             
             // Floats are offset by 2 and only copy 2 bytes because I am cutting off the first 2 bytes (compressed short floats)
-            Buffer.BlockCopy(BitConverter.GetBytes(entity.position.x), 2, bytes, 2 + (i * EntitySize) + 2, 2);
-            Buffer.BlockCopy(BitConverter.GetBytes(entity.position.y), 2, bytes, 2 + (i * EntitySize) + 4, 2);
-            Buffer.BlockCopy(BitConverter.GetBytes(entity.position.z), 2, bytes, 2 + (i * EntitySize) + 6, 2);
+            Buffer.BlockCopy(QuantizeFloat(entity.position.x), 0, bytes, 2 + (i * EntitySize) + 2, 2);
+            Buffer.BlockCopy(QuantizeFloat(entity.position.y), 0, bytes, 2 + (i * EntitySize) + 4, 2);
+            Buffer.BlockCopy(QuantizeFloat(entity.position.z), 0, bytes, 2 + (i * EntitySize) + 6, 2);
             
-            Buffer.BlockCopy(BitConverter.GetBytes(entity.rotation.x), 2, bytes, 2 + (i * EntitySize) + 8, 2);
-            Buffer.BlockCopy(BitConverter.GetBytes(entity.rotation.y), 2, bytes, 2 + (i * EntitySize) + 10, 2);
-            Buffer.BlockCopy(BitConverter.GetBytes(entity.rotation.z), 2, bytes, 2 + (i * EntitySize) + 12, 2);
-            Buffer.BlockCopy(BitConverter.GetBytes(entity.rotation.w), 2, bytes, 2 + (i * EntitySize) + 14, 2);
+            Buffer.BlockCopy(QuantizeFloat(entity.rotation.x), 0, bytes, 2 + (i * EntitySize) + 8, 2);
+            Buffer.BlockCopy(QuantizeFloat(entity.rotation.y), 0, bytes, 2 + (i * EntitySize) + 10, 2);
+            Buffer.BlockCopy(QuantizeFloat(entity.rotation.z), 0, bytes, 2 + (i * EntitySize) + 12, 2);
+            Buffer.BlockCopy(QuantizeFloat(entity.rotation.w), 0, bytes, 2 + (i * EntitySize) + 14, 2);
             
             i++;
         }
@@ -49,14 +49,14 @@ public struct NetworkEntity
             NetworkEntity entity;
             entity.entityId = bytes[2 + (i * EntitySize) + offset];
             entity.position = new Vector3(
-                ShortFloatToFloat(bytes, 2 + (i * EntitySize) + 2 + offset), 
-                ShortFloatToFloat(bytes, 2 + (i * EntitySize) + 4 + offset), 
-                ShortFloatToFloat(bytes, 2 + (i * EntitySize) + 6 + offset));
+                UnQunatizeFloat(bytes, 2 + (i * EntitySize) + 2 + offset), 
+                UnQunatizeFloat(bytes, 2 + (i * EntitySize) + 4 + offset), 
+                UnQunatizeFloat(bytes, 2 + (i * EntitySize) + 6 + offset));
             entity.rotation = new Quaternion(
-                ShortFloatToFloat(bytes, 2 + (i * EntitySize) + 8 + offset), 
-                ShortFloatToFloat(bytes, 2 + (i * EntitySize) + 10 + offset), 
-                ShortFloatToFloat(bytes, 2 + (i * EntitySize) + 12 + offset), 
-                ShortFloatToFloat(bytes, 2 + (i * EntitySize) + 14 + offset));
+                UnQunatizeFloat(bytes, 2 + (i * EntitySize) + 8 + offset), 
+                UnQunatizeFloat(bytes, 2 + (i * EntitySize) + 10 + offset), 
+                UnQunatizeFloat(bytes, 2 + (i * EntitySize) + 12 + offset), 
+                UnQunatizeFloat(bytes, 2 + (i * EntitySize) + 14 + offset));
 
             entities.Add(entity);
         }
@@ -64,18 +64,16 @@ public struct NetworkEntity
         return entities;
     }
 
-    // Not used at the moment to avoid extra memory allocations
-    private static byte[] FloatToShortFloat(float f)
+    // Quantize floats to the nearest 1/64 of a unit, with a max absolute value of about 511 units
+    private static byte[] QuantizeFloat(float f)
     {
-        byte[] full = BitConverter.GetBytes(f);
-        return new[] { full[2], full[3] };
+        short quantized = (short)(f * 64);
+        return BitConverter.GetBytes(quantized);
     }
 
-    private static float ShortFloatToFloat(byte[] bytes, int start)
+    private static float UnQunatizeFloat(byte[] bytes, int offset)
     {
-        byte[] floatBytes = new byte[4];
-        floatBytes[2] = bytes[start];
-        floatBytes[3] = bytes[start + 1];
-        return BitConverter.ToSingle(floatBytes, 0);
+        short quantized = BitConverter.ToInt16(bytes, offset);
+        return (float)quantized / 64f;
     }
 }
