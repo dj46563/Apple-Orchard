@@ -2,6 +2,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading;
 using UnityEngine;
 using ENet;
 using K4os.Compression.LZ4;
@@ -15,7 +16,6 @@ public class Client
     public event Action<byte[]> PacketReceived;
 
     public bool IsConnected { get; private set; } = false;
-    public uint PeerId { get; private set; }
     
     private Host _client = new Host();
     private ENet.Event _netEvent;
@@ -30,8 +30,6 @@ public class Client
         _address.SetHost(host);
         _client.Create();
         _peer = _client.Connect(_address, Constants.ChannelLimit);
-
-        PeerId = _peer.ID;
     }
 
     public void SendBytes(byte[] data)

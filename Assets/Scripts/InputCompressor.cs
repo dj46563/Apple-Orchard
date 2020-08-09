@@ -12,6 +12,15 @@ public static class InputCompressor
         public bool S;
         public bool D;
         public bool Space;
+        
+        public void ClearInputs()
+        {
+            W = false;
+            A = false;
+            S = false;
+            D = false;
+            Space = false;
+        }
     }
     
     public static byte CompressInput(Inputs inputs)

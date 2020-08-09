@@ -8,9 +8,15 @@ using BitStream = BitStreams.BitStream;
 
 public class DirtyStateTransport : MonoBehaviour
 {
-    private readonly float InputSendRate = 10;
-    private readonly float StateSendRate = 5;
-    
+    public static readonly float InputSendRate = 10;
+    public static readonly float StateSendRate = 5;
+
+    // Happens right before the input packet is created then sent, ushort is the latestPacketReceived
+    public static event Action<ushort> PreClientInputSend;
+    public static event Action<ushort> PostClientInputSend;
+    // Triggers when the client receives a state from the server, to validate client side prediction
+    public static event Action<ushort, Vector3> ServerPositionReceived; 
+
     public Server Server { get; private set; }
     public  Client Client { get; private set; }
 
@@ -25,6 +31,15 @@ public class DirtyStateTransport : MonoBehaviour
     public GameObject PlayerPrefab;
     
     private Dictionary<ushort, GameObject> NetworkedObjects = new Dictionary<ushort, GameObject>();
+    
+    // SERVER ONLY
+    // Keeps track of the last input packet that each client sent
+    private Dictionary<ushort, ClientInputRecord> ClientInputHistory = new Dictionary<ushort, ClientInputRecord>(); 
+    
+    // CLIENT ONLY
+    private ushort _clientOwnedId;
+    private GameObject _clientOwnedObject;
+    private bool _clientInitialized;
 
     public void StartServer()
     {
@@ -38,20 +53,56 @@ public class DirtyStateTransport : MonoBehaviour
 
     private void ServerOnPacketReceived(byte[] data, uint senderId)
     {
+        // How many frames worth of movement to apply to the entity
+        // If the packet is old, none, if this is the next packet, 1
+        // If we detect there was a gap in packets, double, etc
+        int multiplier = 0;
+        
         InputPacket inputPacket = InputPacket.Deserialize(data);
         InputCompressor.Inputs inputs = InputCompressor.DecompressInput(inputPacket.inputByte);
+        
+        // Check it against the client input history
+        if (ClientInputHistory.ContainsKey((ushort) senderId))
+        {
+            // Check to see if this input is newer than the newest one we know of
+            if (inputPacket.id > ClientInputHistory[(ushort) senderId].packetId)
+            {
+                multiplier = inputPacket.id - ClientInputHistory[(ushort) senderId].packetId;
+                
+                // Put the record into the dictionary
+                ClientInputRecord inputRecord;
+                inputRecord.packetId = inputPacket.id;
+                inputRecord.inputs = inputs;
+                ClientInputHistory[(ushort) senderId] = inputRecord;
+            }
+            else
+            {
+                multiplier = 0;
+                Debug.Log("Server received out of order client input packet");
+            }
+        }
+        else
+        {
+            multiplier = 1;
+            
+            // Put the record into the dictionary
+            ClientInputRecord inputRecord;
+            inputRecord.packetId = inputPacket.id;
+            inputRecord.inputs = inputs;
+            ClientInputHistory[(ushort) senderId] = inputRecord;
+        }
         
         // GAME LOGIC BEGIN, MOVE TO NEW AREA LATER
         int horizontal = Convert.ToSByte(inputs.D) - Convert.ToSByte(inputs.A);
         int vertical = Convert.ToSByte(inputs.W) - Convert.ToSByte(inputs.S);
         // update state
         NetworkEntity2 entity = NetworkState.LatestEntityDict[(ushort)senderId];
-        entity.Position += new Vector3(horizontal, 0, vertical) * (1 / InputSendRate);
+        entity.Position += new Vector3(horizontal, 0, vertical) * multiplier * (1 / InputSendRate);
     }
 
     private void ServerOnPeerDisconncted(uint id)
     {
-        StatePacket disconnectPacket;
+        StatePacket disconnectPacket = new StatePacket();
         disconnectPacket.packetType = StatePacket.PacketType.Disconnect;
         disconnectPacket.id = (ushort)id;
         Server.BroadcastBytes(disconnectPacket.Serialize());
@@ -59,6 +110,8 @@ public class DirtyStateTransport : MonoBehaviour
         // Destroy the networked object
         Destroy(NetworkedObjects[(ushort)id]);
         NetworkedObjects.Remove((ushort) id);
+        // Unregister from client input history
+        ClientInputHistory.Remove((ushort) id);
         
         NetworkState.LatestEntityDict.Remove((ushort)id);
     }
@@ -68,7 +121,7 @@ public class DirtyStateTransport : MonoBehaviour
         GameObject obj = Instantiate(PlayerPrefab);
         obj.GetComponent<FollowState>().Id = (ushort)id;
         NetworkedObjects[(ushort) id] = obj;
-        
+
         NetworkEntity2 entity = new NetworkEntity2()
         {
             id = (ushort) id,
@@ -77,16 +130,17 @@ public class DirtyStateTransport : MonoBehaviour
         };
         NetworkState.LatestEntityDict[(ushort)id] = entity;
 
-        StatePacket connectPacket;
+        StatePacket connectPacket = new StatePacket();
         connectPacket.packetType = StatePacket.PacketType.Connect;
         connectPacket.id = (ushort)id;
         // Broadcast the connection to all peers except for the peer that is connecting
         // They will receive their Instantiation in their initial state packet
         Server.BroadcastBytesToEveryoneExcept(connectPacket.Serialize(), id);
 
-        StatePacket initialStatePacket;
+        StatePacket initialStatePacket = new StatePacket();
         initialStatePacket.packetType = StatePacket.PacketType.InitialState;
         initialStatePacket.id = currentPacketId;
+        initialStatePacket.clientId = (ushort) id;
         Server.BroadcastBytesTo(initialStatePacket.Serialize(), id);
     }
 
@@ -102,26 +156,45 @@ public class DirtyStateTransport : MonoBehaviour
     {
         ushort id = StatePacket.GetId(data);
 
+        StatePacket.PacketType packetType = StatePacket.DeserializeType(data);
+
         GameObject obj;
-        switch (StatePacket.DeserializeType(data))
+        switch (packetType)
         {
             case StatePacket.PacketType.State:
                 StatePacket.UpdateNetworkState(latestPacketReceived, data);
-
+                
+                // Grab the new position of this client's entity and invoke the event to validate client side prediction
+                Vector3 clientOwnedPosition = NetworkState.LatestEntityDict[_clientOwnedId].Position;
+                ServerPositionReceived?.Invoke(id, clientOwnedPosition);
                 LerpT = 0;
                 break;
             case StatePacket.PacketType.InitialState:
+                _clientOwnedId = StatePacket.GetClientId(data);
+                
                 StatePacket.UpdateNetworkState(0, data);
                 foreach (var pair in NetworkState.LatestEntityDict)
                 {
                     obj = Instantiate(PlayerPrefab, pair.Value.Position, pair.Value.Rotation);
                     obj.GetComponent<FollowState>().Id = pair.Key;
                     NetworkedObjects[pair.Key] = obj;
+
+                    if (pair.Key == _clientOwnedId)
+                    {
+                        obj.AddComponent<ClientInput>();
+                    }
                 }
+                
+                _clientOwnedObject = NetworkedObjects[_clientOwnedId];
+                // Set the entity that this client owns so that client side prediction knows who to affect
+                _clientOwnedObject.GetComponent<FollowState>().SetOwner();
+
+                // Client is now initialized
+                _clientInitialized = true;
                 break;
             case StatePacket.PacketType.Connect:
                 // Get the new entities data from packet
-                StatePacket.UpdateNetworkEntity(data);
+                StatePacket.DeserializeConnectState(data);
                 // Create the player's object
                 obj = Instantiate(PlayerPrefab);
                 obj.GetComponent<FollowState>().Id = id;
@@ -132,12 +205,19 @@ public class DirtyStateTransport : MonoBehaviour
                 NetworkedObjects.Remove(id);
                 break;
         }
+        
+        if (packetType == StatePacket.PacketType.State || packetType == StatePacket.PacketType.InitialState)
+        {
+            // Update the latest packet received to the id of the received packet if this is some sort of state packet
+            // the connect and disconnect packet id's are different, they tell us the id of the peer
+            latestPacketReceived = id;
+        }
     }
 
     private void LateUpdate()
     {
         Server?.PollEvents();
-        Client?.PollEvents();
+        
 
         _timer += Time.deltaTime;
         if (Server != null)
@@ -146,24 +226,38 @@ public class DirtyStateTransport : MonoBehaviour
             {
                 _timer = 0;
 
-                StatePacket statePacket;
+                StatePacket statePacket = new StatePacket();
                 statePacket.packetType = StatePacket.PacketType.State;
                 statePacket.id = currentPacketId++;
                 Server.BroadcastBytes(statePacket.Serialize());
             }
         }
-        else if (Client != null)
+        else if (Client != null && _clientInitialized)
         {
             if (_timer >= 1 / InputSendRate)
             {
                 _timer = 0;
+
+                // Client side prediction
+                PreClientInputSend?.Invoke(latestPacketReceived);
                 
-                InputPacket inputPacket = InputPacket.ComposePacket(currentPacketId++);
+                // Grab the inputs recorder by Client input and send them
+                InputCompressor.Inputs inputs = _clientOwnedObject.GetComponent<ClientInput>().ClientInputs;
+                InputPacket inputPacket = InputPacket.ComposePacket(currentPacketId, inputs);
                 Client.SendBytes(inputPacket.Serialize());
+                ++currentPacketId;
+                
+                PostClientInputSend?.Invoke(latestPacketReceived);
+
+                // DISABLED FOR CLIENT SIDE PREDICTION
+                // InputPacket inputPacket = InputPacket.ComposePacket(currentPacketId++);
+                // Client.SendBytes(inputPacket.Serialize());
             }
 
             LerpT += Time.deltaTime * StateSendRate;
         }
+        
+        Client?.PollEvents();
     }
     
     private void OnApplicationQuit()
@@ -172,12 +266,14 @@ public class DirtyStateTransport : MonoBehaviour
         Client?.Disconnect();
     }
 
-    private struct StatePacket
+    private class StatePacket
     {
         public enum PacketType : byte {Connect, Disconnect, State, InitialState}
 
         public PacketType packetType;
         public ushort id;
+        // Only used for Initial state packet, it is the peer ID of the client
+        public ushort clientId;
 
         public byte[] Serialize()
         {
@@ -193,6 +289,7 @@ public class DirtyStateTransport : MonoBehaviour
                     NetworkState.Serialize(stream);
                     break;
                 case PacketType.InitialState:
+                    stream.WriteUInt16(clientId);
                     NetworkState.Serialize(stream, true);
                     break;
                 case PacketType.Connect:
@@ -216,12 +313,18 @@ public class DirtyStateTransport : MonoBehaviour
             return BitConverter.ToUInt16(data, 1);
         }
 
+        public static ushort GetClientId(byte[] data)
+        {
+            return BitConverter.ToUInt16(data, 3);
+        }
+
         // Used for connect packets, to snap an entity to its initial transform
-        public static void UpdateNetworkEntity(byte[] data)
+        public static void DeserializeConnectState(byte[] data)
         {
             BitStream stream  = new BitStream(data);
-            stream.Seek(1, 0);
+            PacketType packetType = (PacketType) stream.ReadByte();
             ushort id = stream.ReadUInt16();
+            
             NetworkEntity2 entity = NetworkEntity2.Deserialize(stream);
 
             NetworkState.PreviousEntityDict[id] = entity;
@@ -232,11 +335,19 @@ public class DirtyStateTransport : MonoBehaviour
         public static void UpdateNetworkState(ushort latestPacket, byte[] data)
         {
             BitStream stream  = new BitStream(data);
-            // Skip the first type byte
-            stream.Seek(1, 0);
+            PacketType packetType = (PacketType) stream.ReadByte();
             ushort id = stream.ReadUInt16();
+            
+            // if this is the initial state, there is an extra ushort in there we need to skip over
+            // This sucks and State Packet needs to be redesigned to handle different packet type
+            // with different data
+            if (packetType == PacketType.InitialState)
+                stream.ReadUInt16();
+            
             if (id > latestPacket)
+            {
                 NetworkState.Deserialize(stream);
+            }
         }
     }
 
@@ -261,19 +372,18 @@ public class DirtyStateTransport : MonoBehaviour
             return bytes;
         }
 
-        public static InputPacket ComposePacket(ushort currentPacketId)
+        public static InputPacket ComposePacket(ushort currentPacketId, InputCompressor.Inputs inputs)
         {
-            InputCompressor.Inputs inputs;
-            inputs.W = Input.GetKey(KeyCode.W);
-            inputs.A = Input.GetKey(KeyCode.A);
-            inputs.S = Input.GetKey(KeyCode.S);
-            inputs.D = Input.GetKey(KeyCode.D);
-            inputs.Space = Input.GetKey(KeyCode.Space);
-
             InputPacket inputPacket;
             inputPacket.id = currentPacketId;
             inputPacket.inputByte = InputCompressor.CompressInput(inputs);
             return inputPacket;
         }
+    }
+
+    private struct ClientInputRecord
+    {
+        public ushort packetId;
+        public InputCompressor.Inputs inputs;
     }
 }

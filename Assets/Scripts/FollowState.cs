@@ -6,11 +6,19 @@ using UnityEngine;
 public class FollowState : MonoBehaviour
 {
     public ushort? Id;
+    private bool _isOwner = false;
+
+    public void SetOwner()
+    {
+        _isOwner = true;
+    }
 
     private void Update()
     {
-        if (Id != null && NetworkState.PreviousEntityDict.ContainsKey(Id.Value))
+        // Only move non owned entities
+        if (!_isOwner && Id != null && NetworkState.PreviousEntityDict.ContainsKey(Id.Value))
         {
+            // Interpolate position and rotation
             Vector3 previousPosition = NetworkState.PreviousEntityDict[Id.Value].Position;
             Vector3 latestPosition = NetworkState.LatestEntityDict[Id.Value].Position;
             

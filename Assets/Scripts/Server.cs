@@ -36,7 +36,7 @@ public class Server
         packet.Create(data);
         _server.Broadcast(0, ref packet);
         
-        Debug.Log("All. Raw: " + data.Length);
+        //Debug.Log("All. Raw: " + data.Length);
         
         return data.Length;
     }
@@ -45,8 +45,6 @@ public class Server
         Packet packet = default(Packet);
         packet.Create(data);
         _server.Broadcast(0, ref packet, new Peer[] { _peerDict[peerId] });
-        
-        Debug.Log("Individual. Raw: " + data.Length);
         
         return data.Length;
     }
