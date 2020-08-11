@@ -31,15 +31,17 @@ public class DirtyStateTransport : MonoBehaviour
     public GameObject PlayerPrefab;
     
     private Dictionary<ushort, GameObject> NetworkedObjects = new Dictionary<ushort, GameObject>();
-    
+
     // SERVER ONLY
     // Keeps track of the last input packet that each client sent
-    private Dictionary<ushort, ClientInputRecord> ClientInputHistory = new Dictionary<ushort, ClientInputRecord>(); 
+    private Dictionary<ushort, ClientInputRecord> ClientInputHistory = new Dictionary<ushort, ClientInputRecord>();
     
     // CLIENT ONLY
     private ushort _clientOwnedId;
     private GameObject _clientOwnedObject;
     private bool _clientInitialized;
+    // Reference to the previous input packet, to determine if rotation is dirty
+    private InputPacket _previousInputPacket = InputPacket.InitialPacket();
 
     public void StartServer()
     {
@@ -58,8 +60,11 @@ public class DirtyStateTransport : MonoBehaviour
         // If we detect there was a gap in packets, double, etc
         int multiplier = 0;
         
-        InputPacket inputPacket = InputPacket.Deserialize(data);
+        InputPacket inputPacket = InputPacket.Deserialize(data, ClientInputHistory[(ushort)senderId]);
         InputCompressor.Inputs inputs = InputCompressor.DecompressInput(inputPacket.inputByte);
+        
+        // Keep this packet so we can tell if there was a rotation change next time we make a packet
+        _previousInputPacket = inputPacket;
         
         // Check it against the client input history
         if (ClientInputHistory.ContainsKey((ushort) senderId))
@@ -73,6 +78,7 @@ public class DirtyStateTransport : MonoBehaviour
                 ClientInputRecord inputRecord;
                 inputRecord.packetId = inputPacket.id;
                 inputRecord.inputs = inputs;
+                inputRecord.rotation = inputPacket.rotation;
                 ClientInputHistory[(ushort) senderId] = inputRecord;
             }
             else
@@ -89,6 +95,7 @@ public class DirtyStateTransport : MonoBehaviour
             ClientInputRecord inputRecord;
             inputRecord.packetId = inputPacket.id;
             inputRecord.inputs = inputs;
+            inputRecord.rotation = inputPacket.rotation;
             ClientInputHistory[(ushort) senderId] = inputRecord;
         }
         
@@ -97,7 +104,8 @@ public class DirtyStateTransport : MonoBehaviour
         int vertical = Convert.ToSByte(inputs.W) - Convert.ToSByte(inputs.S);
         // update state
         NetworkEntity2 entity = NetworkState.LatestEntityDict[(ushort)senderId];
-        entity.Position += new Vector3(horizontal, 0, vertical) * multiplier * (1 / InputSendRate);
+        entity.Rotation = inputPacket.rotation;
+        entity.Position += entity.Rotation * new Vector3(horizontal, 0, vertical) * multiplier * (1 / InputSendRate);
     }
 
     private void ServerOnPeerDisconncted(uint id)
@@ -142,14 +150,16 @@ public class DirtyStateTransport : MonoBehaviour
         initialStatePacket.id = currentPacketId;
         initialStatePacket.clientId = (ushort) id;
         Server.BroadcastBytesTo(initialStatePacket.Serialize(), id);
+        
+        ClientInputHistory[(ushort)id] = ClientInputRecord.InitialRecord();
     }
 
-    public void StartClient()
+    public void StartClient(string host)
     {
         Client = new Client();
         Client.PacketReceived += ClientOnPacketReceived;
         
-        Client.Connect(Constants.DefaultHost, Constants.DefaultPort);
+        Client.Connect(host, Constants.DefaultPort);
     }
 
     private void ClientOnPacketReceived(byte[] data)
@@ -188,6 +198,8 @@ public class DirtyStateTransport : MonoBehaviour
                 _clientOwnedObject = NetworkedObjects[_clientOwnedId];
                 // Set the entity that this client owns so that client side prediction knows who to affect
                 _clientOwnedObject.GetComponent<FollowState>().SetOwner();
+                // Disable rendering of the player model for the owner client
+                _clientOwnedObject.GetComponent<DisableRendering>().Disable();
 
                 // Client is now initialized
                 _clientInitialized = true;
@@ -243,9 +255,13 @@ public class DirtyStateTransport : MonoBehaviour
                 
                 // Grab the inputs recorder by Client input and send them
                 InputCompressor.Inputs inputs = _clientOwnedObject.GetComponent<ClientInput>().ClientInputs;
-                InputPacket inputPacket = InputPacket.ComposePacket(currentPacketId, inputs);
-                Client.SendBytes(inputPacket.Serialize());
+                InputPacket inputPacket = InputPacket.ComposePacket(currentPacketId, inputs, _clientOwnedObject.transform.rotation);
+
+                Client.SendBytes(inputPacket.Serialize(_previousInputPacket));
                 ++currentPacketId;
+                
+                // Keep this packet so we can tell if there was a rotation change next time we make a packet
+                _previousInputPacket = inputPacket;
                 
                 PostClientInputSend?.Invoke(latestPacketReceived);
 
@@ -355,28 +371,77 @@ public class DirtyStateTransport : MonoBehaviour
     {
         public ushort id;
         public byte inputByte;
+        public Quaternion rotation;
 
-        public static InputPacket Deserialize(byte[] data)
+        public static InputPacket InitialPacket()
+        {
+            InputPacket inputPacket;
+            inputPacket.id = 0;
+            inputPacket.inputByte = 0;
+            inputPacket.rotation = Quaternion.identity;
+            
+            return inputPacket;
+        }
+
+        public static InputPacket Deserialize(byte[] data, ClientInputRecord old)
         {
             InputPacket returnPacket;
-            returnPacket.id = BitConverter.ToUInt16(data, 0);
-            returnPacket.inputByte = data[2];
+            BitStream stream = new BitStream(data);
+            returnPacket.id = stream.ReadUInt16();
+            returnPacket.inputByte = stream.ReadByte();
+
+            // Rotation
+            bool dirty = stream.ReadBit();
+            if (dirty)
+            {
+                float x = FloatQuantize.UnQunatizeFloat(stream.ReadInt16(), 32767);
+                float y = FloatQuantize.UnQunatizeFloat(stream.ReadInt16(), 32767);
+                float z = FloatQuantize.UnQunatizeFloat(stream.ReadInt16(), 32767);
+                float w = FloatQuantize.UnQunatizeFloat(stream.ReadInt16(), 32767);
+                returnPacket.rotation = new Quaternion(x, y, z, w);
+            }
+            else
+            {
+                returnPacket.rotation = old.rotation;
+            }
+            
             return returnPacket;
         }
 
-        public byte[] Serialize()
+        public byte[] Serialize(InputPacket old)
         {
-            byte[] bytes = new byte[5];
-            Buffer.BlockCopy(BitConverter.GetBytes(id), 0, bytes, 0, 2);
-            bytes[2] = inputByte;
-            return bytes;
+            byte[] bytes = new byte[1];
+            BitStream stream = new BitStream(bytes);
+            stream.AutoIncreaseStream = true;
+            
+            stream.WriteUInt16(id);
+            stream.WriteByte(inputByte);
+            
+            // Rotation uses a dirty bit to signify if the rotation has changed
+            if (old.rotation == rotation)
+            {
+                // dirty bit
+                stream.WriteBit(0);
+            }
+            else
+            {
+                // dirty bit
+                stream.WriteBit(1);
+                stream.WriteInt16(FloatQuantize.QuantizeFloat(rotation.x, 32767));
+                stream.WriteInt16(FloatQuantize.QuantizeFloat(rotation.y, 32767));
+                stream.WriteInt16(FloatQuantize.QuantizeFloat(rotation.z, 32767));
+                stream.WriteInt16(FloatQuantize.QuantizeFloat(rotation.w, 32767));
+            }
+            
+            return stream.CloneAsMemoryStream().ToArray();
         }
 
-        public static InputPacket ComposePacket(ushort currentPacketId, InputCompressor.Inputs inputs)
+        public static InputPacket ComposePacket(ushort currentPacketId, InputCompressor.Inputs inputs, Quaternion rotation)
         {
             InputPacket inputPacket;
             inputPacket.id = currentPacketId;
             inputPacket.inputByte = InputCompressor.CompressInput(inputs);
+            inputPacket.rotation = rotation;
             return inputPacket;
         }
     }
@@ -385,5 +450,16 @@ public class DirtyStateTransport : MonoBehaviour
     {
         public ushort packetId;
         public InputCompressor.Inputs inputs;
+        public Quaternion rotation;
+
+        public static ClientInputRecord InitialRecord()
+        {
+            ClientInputRecord record;
+            record.packetId = 0;
+            record.inputs = new InputCompressor.Inputs();
+            record.rotation = Quaternion.identity;
+
+            return record;
+        }
     }
 }

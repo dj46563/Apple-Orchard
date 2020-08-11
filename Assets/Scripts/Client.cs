@@ -14,6 +14,7 @@ public class Client
     public event Action Disconnected;
     public event Action TimedOut;
     public event Action<byte[]> PacketReceived;
+    public event Action<byte[]> PacketSent;
 
     public bool IsConnected { get; private set; } = false;
     
@@ -37,6 +38,8 @@ public class Client
         Packet packet = default(Packet);
         packet.Create(data);
         _peer.Send(0, ref packet);
+        
+        PacketSent?.Invoke(data);
     }
 
     public void PollEvents()
@@ -88,5 +91,10 @@ public class Client
         _peer.DisconnectNow(0);
         //while (_peer.State == PeerState.Disconnecting && _peer.State != PeerState.Disconnected) { }
         _client.Dispose();
+    }
+
+    public float GetRTT()
+    {
+        return _peer.RoundTripTime;
     }
 }

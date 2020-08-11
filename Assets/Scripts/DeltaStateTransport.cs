@@ -86,7 +86,7 @@ public class DeltaStateTransport : MonoBehaviour
 
         latestDiff = default(DiffState); // Dummy value, latest diff will be replaced by the next received state packet
         
-        Client.Connect(Constants.DefaultHost, Constants.DefaultPort);
+        Client.Connect(Constants.DefaultRemoteHost, Constants.DefaultPort);
     }
 
     private void ClientOnPacketReceived(byte[] data)

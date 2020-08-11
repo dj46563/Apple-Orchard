@@ -9,7 +9,9 @@ public class ClientInput : MonoBehaviour
 {
     private const int InputStateBufferSize = 10;
     private const float AcceptablePredictionErrorDistance = 0.02f;
-    
+
+    private Transform _cameraTransform;
+    private Transform _transform;
     
     private Inputs _clientInputs;
     // Accessed by dirty state transport to send to the server what inputs the client has pressed
@@ -37,13 +39,18 @@ public class ClientInput : MonoBehaviour
 
     private void Awake()
     {
+        _transform = transform;
+        // Initialize camera and match its rotation to the player
+        _cameraTransform = GameController.PlayerCamera.transform;
+        _cameraTransform.rotation = _transform.rotation;
+        
         DirtyStateTransport.PreClientInputSend += DirtyStateTransportOnPreClientInputSend;
         DirtyStateTransport.PostClientInputSend += DirtyStateTransportOnPostClientInputSend;
         DirtyStateTransport.ServerPositionReceived += DirtyStateTransportOnServerPositionReceived;
         
         _inputStates = new CircularBuffer<InputState>(InputStateBufferSize);
         targetPostion = transform.position;
-        previousTargetPosition = transform.position;
+        previousTargetPosition = _transform.position;
     }
 
     private void DirtyStateTransportOnServerPositionReceived(ushort stateId, Vector3 serverPosition)
@@ -76,7 +83,7 @@ public class ClientInput : MonoBehaviour
         // Change the direction that the client moves
         int horizontal = (_clientInputs.D ? 1 : 0) - (_clientInputs.A ? 1 : 0);
         int vertical = (_clientInputs.W ? 1 : 0) - (_clientInputs.S ? 1 : 0);
-        targetPostion += new Vector3(horizontal, 0, vertical) * (1 / DirtyStateTransport.InputSendRate);
+        targetPostion += _transform.rotation * new Vector3(horizontal, 0, vertical) * (1 / DirtyStateTransport.InputSendRate);
         
         // Record position
         InputState inputState;
@@ -108,6 +115,9 @@ public class ClientInput : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
+        if (!Application.isFocused)
+            return;
+        
         // Will get to 0 in the time it takes for another input packet to be sent
         lerpT += Time.deltaTime * DirtyStateTransport.InputSendRate;
         // Calculate a position between the old target position and the new one
@@ -125,7 +135,12 @@ public class ClientInput : MonoBehaviour
         if (Input.GetKey(KeyCode.D))
             _clientInputs.D = true;
         
-        //transform.Rotate(-Vector3.right, Input.GetAxis("Mouse Y"), Space.Self);
-        //transform.Rotate(Vector3.up, Input.GetAxis("Mouse X"), Space.World);
+        
+        _transform.Rotate(Vector3.up, Input.GetAxis("Mouse X"), Space.World);
+        
+        // Update camera position
+        _cameraTransform.position = _transform.position;
+        _cameraTransform.Rotate(-Vector3.right, Input.GetAxis("Mouse Y"), Space.Self);
+        _cameraTransform.Rotate(Vector3.up, Input.GetAxis("Mouse X"), Space.World);
     }
 }

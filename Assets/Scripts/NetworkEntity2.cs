@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Security.Cryptography;
 using UnityEngine;
 using BitStream = BitStreams.BitStream;
-
 public class NetworkEntity2
 {
     public ushort id;
@@ -86,9 +85,9 @@ public class NetworkEntity2
             stream.WriteBit(_dirty);
             if (_dirty)
             {
-                stream.WriteInt16(QuantizeFloat(_position.x, 64));
-                stream.WriteInt16(QuantizeFloat(_position.y, 64));
-                stream.WriteInt16(QuantizeFloat(_position.z, 64));
+                stream.WriteInt16(FloatQuantize.QuantizeFloat(_position.x, 64));
+                stream.WriteInt16(FloatQuantize.QuantizeFloat(_position.y, 64));
+                stream.WriteInt16(FloatQuantize.QuantizeFloat(_position.z, 64));
             }
 
             _dirty = false;
@@ -102,9 +101,9 @@ public class NetworkEntity2
             bool dirtyBit = stream.ReadBit();
             if (dirtyBit)
             {
-                float x = UnQunatizeFloat(stream.ReadInt16(), 64);
-                float y = UnQunatizeFloat(stream.ReadInt16(), 64);
-                float z = UnQunatizeFloat(stream.ReadInt16(), 64);
+                float x = FloatQuantize.UnQunatizeFloat(stream.ReadInt16(), 64);
+                float y = FloatQuantize.UnQunatizeFloat(stream.ReadInt16(), 64);
+                float z = FloatQuantize.UnQunatizeFloat(stream.ReadInt16(), 64);
                 networkedPosition._position = new Vector3(x, y, z);
             }
             else
@@ -143,10 +142,10 @@ public class NetworkEntity2
             stream.WriteBit(_dirty);
             if (_dirty)
             {
-                stream.WriteInt16(QuantizeFloat(_rotation.x, 64));
-                stream.WriteInt16(QuantizeFloat(_rotation.y, 64));
-                stream.WriteInt16(QuantizeFloat(_rotation.z, 64));
-                stream.WriteInt16(QuantizeFloat(_rotation.w, 64));
+                stream.WriteInt16(FloatQuantize.QuantizeFloat(_rotation.x, 32767));
+                stream.WriteInt16(FloatQuantize.QuantizeFloat(_rotation.y, 32767));
+                stream.WriteInt16(FloatQuantize.QuantizeFloat(_rotation.z, 32767));
+                stream.WriteInt16(FloatQuantize.QuantizeFloat(_rotation.w, 32767));
             }
             
             _dirty = false;
@@ -160,10 +159,10 @@ public class NetworkEntity2
             bool dirtyBit = stream.ReadBit();
             if (dirtyBit)
             {
-                float x = UnQunatizeFloat(stream.ReadInt16(), 64);
-                float y = UnQunatizeFloat(stream.ReadInt16(), 64);
-                float z = UnQunatizeFloat(stream.ReadInt16(), 64);
-                float w = UnQunatizeFloat(stream.ReadInt16(), 64);
+                float x = FloatQuantize.UnQunatizeFloat(stream.ReadInt16(), 32767);
+                float y = FloatQuantize.UnQunatizeFloat(stream.ReadInt16(), 32767);
+                float z = FloatQuantize.UnQunatizeFloat(stream.ReadInt16(), 32767);
+                float w = FloatQuantize.UnQunatizeFloat(stream.ReadInt16(), 32767);
                 networkedRotation._rotation = new Quaternion(x, y, z, w);
             }
             else
@@ -173,16 +172,5 @@ public class NetworkEntity2
             
             return networkedRotation;
         }
-    }
-    
-    private static short QuantizeFloat(float f, int factor)
-    {
-        short quantized = (short)(f * factor);
-        return quantized;
-    }
-
-    private static float UnQunatizeFloat(short quantized, int factor)
-    {
-        return (float)quantized / (float)factor;
     }
 }

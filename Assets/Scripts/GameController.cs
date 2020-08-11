@@ -10,37 +10,47 @@ public class GameController : MonoBehaviour
     
     private SceneController _sceneController;
     private DirtyStateTransport _transport;
+
+    public static Camera PlayerCamera { get; set; }
+    [SerializeField] private Camera GameCamera;
     
     // Start is called before the first frame update
     void Awake()
     {
         MenuController.OnHostPressed += Host;
-        MenuController.OnConnectPressed += Connect;
+        MenuController.OnLocalConnectPressed += () => Connect(Constants.DefaultLocalHost);
+        MenuController.OnRemoteConnectPressed += () => Connect(Constants.DefaultRemoteHost);
 
         _transport = gameObject.AddComponent<DirtyStateTransport>();
         _transport.PlayerPrefab = PlayerPrefab;
+        
+        _sceneController = new SceneController();
         
         if (Application.isBatchMode)
         {
             Host();
         }
-        else 
+        else if (Constants.AutoConnect)
         {
-            _sceneController = new SceneController();
-
-            if (Constants.AutoConnect)
-            {
-                Connect();
-            }
+            Connect(Constants.DefaultRemoteHost);
         }
     }
-    
+
     // TODO: Move this stuff below, into the DeltaStateTransport
 
-    private void Connect()
+    private void Connect(string host)
     {
-        _transport.StartClient();
-        _transport.Client.Connected += _sceneController.UnloadMenuUI;
+        _transport.StartClient(host);
+        
+        _transport.Client.Connected += () =>
+        {
+            _sceneController.UnloadMenuUI();
+            Cursor.visible = false;
+            Cursor.lockState = CursorLockMode.Locked;
+        };
+
+        // Setup camera for this client
+        PlayerCamera = GameCamera;
     }
 
     private void Host()
