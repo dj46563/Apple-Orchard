@@ -8,8 +8,9 @@ using BitStream = BitStreams.BitStream;
 
 public class DirtyStateTransport : MonoBehaviour
 {
-    public static readonly float InputSendRate = 10;
+    public static readonly float InputSendRate = 20;
     public static readonly float StateSendRate = 5;
+    public static readonly float RotationDifferenceAngleThreshold = 0.1f;
 
     // Happens right before the input packet is created then sent, ushort is the latestPacketReceived
     public static event Action<ushort> PreClientInputSend;
@@ -62,10 +63,7 @@ public class DirtyStateTransport : MonoBehaviour
         
         InputPacket inputPacket = InputPacket.Deserialize(data, ClientInputHistory[(ushort)senderId]);
         InputCompressor.Inputs inputs = InputCompressor.DecompressInput(inputPacket.inputByte);
-        
-        // Keep this packet so we can tell if there was a rotation change next time we make a packet
-        _previousInputPacket = inputPacket;
-        
+
         // Check it against the client input history
         if (ClientInputHistory.ContainsKey((ushort) senderId))
         {
@@ -104,8 +102,18 @@ public class DirtyStateTransport : MonoBehaviour
         int vertical = Convert.ToSByte(inputs.W) - Convert.ToSByte(inputs.S);
         // update state
         NetworkEntity2 entity = NetworkState.LatestEntityDict[(ushort)senderId];
-        entity.Rotation = inputPacket.rotation;
-        entity.Position += entity.Rotation * new Vector3(horizontal, 0, vertical) * multiplier * (1 / InputSendRate);
+
+        if (inputPacket.dirtyRotation)
+        {
+            entity.Rotation = inputPacket.rotation;
+        }
+
+        // Calculate the delta of their position
+        Vector3 delta = entity.Rotation * new Vector3(horizontal, 0, vertical) * multiplier * (1 / InputSendRate);
+        // Move in that direction while simulating collisions
+        NetworkedObjects[(ushort) senderId].GetComponent<CharacterController>().Move(delta);
+        // Update the NetworkState to this new position
+        entity.Position = NetworkedObjects[(ushort) senderId].transform.position;
     }
 
     private void ServerOnPeerDisconncted(uint id)
@@ -127,7 +135,9 @@ public class DirtyStateTransport : MonoBehaviour
     private void ServerOnPeerConnected(uint id)
     {
         GameObject obj = Instantiate(PlayerPrefab);
-        obj.GetComponent<FollowState>().Id = (ushort)id;
+        FollowState followState = obj.GetComponent<FollowState>();
+        followState.Id = (ushort)id;
+        followState.IsServer = true;
         NetworkedObjects[(ushort) id] = obj;
 
         NetworkEntity2 entity = new NetworkEntity2()
@@ -371,6 +381,7 @@ public class DirtyStateTransport : MonoBehaviour
     {
         public ushort id;
         public byte inputByte;
+        public bool dirtyRotation;
         public Quaternion rotation;
 
         public static InputPacket InitialPacket()
@@ -378,6 +389,7 @@ public class DirtyStateTransport : MonoBehaviour
             InputPacket inputPacket;
             inputPacket.id = 0;
             inputPacket.inputByte = 0;
+            inputPacket.dirtyRotation = false;
             inputPacket.rotation = Quaternion.identity;
             
             return inputPacket;
@@ -394,6 +406,8 @@ public class DirtyStateTransport : MonoBehaviour
             bool dirty = stream.ReadBit();
             if (dirty)
             {
+                returnPacket.dirtyRotation = true;
+                
                 float x = FloatQuantize.UnQunatizeFloat(stream.ReadInt16(), 32767);
                 float y = FloatQuantize.UnQunatizeFloat(stream.ReadInt16(), 32767);
                 float z = FloatQuantize.UnQunatizeFloat(stream.ReadInt16(), 32767);
@@ -402,6 +416,7 @@ public class DirtyStateTransport : MonoBehaviour
             }
             else
             {
+                returnPacket.dirtyRotation = false;
                 returnPacket.rotation = old.rotation;
             }
             
@@ -418,7 +433,7 @@ public class DirtyStateTransport : MonoBehaviour
             stream.WriteByte(inputByte);
             
             // Rotation uses a dirty bit to signify if the rotation has changed
-            if (old.rotation == rotation)
+            if (dirtyRotation || Quaternion.Angle(rotation, old.rotation) < RotationDifferenceAngleThreshold)
             {
                 // dirty bit
                 stream.WriteBit(0);
@@ -441,6 +456,7 @@ public class DirtyStateTransport : MonoBehaviour
             InputPacket inputPacket;
             inputPacket.id = currentPacketId;
             inputPacket.inputByte = InputCompressor.CompressInput(inputs);
+            inputPacket.dirtyRotation = false;
             inputPacket.rotation = rotation;
             return inputPacket;
         }

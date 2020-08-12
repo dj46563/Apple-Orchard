@@ -51,6 +51,10 @@ public class GameController : MonoBehaviour
 
         // Setup camera for this client
         PlayerCamera = GameCamera;
+        
+        // Load the game UI and hookup its reference to the client so it can display network debug info
+        _sceneController.LoadGameUI();
+        GameUIController.OnAwake += controller => controller.Client = _transport.Client;
     }
 
     private void Host()

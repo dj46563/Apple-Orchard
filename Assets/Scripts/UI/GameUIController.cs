@@ -7,6 +7,8 @@ using UnityEngine.UI;
 
 public class GameUIController : MonoBehaviour
 {
+    public static event Action<GameUIController> OnAwake;
+
     public int BufferSize = 10;
     
     public Client Client;
@@ -15,28 +17,44 @@ public class GameUIController : MonoBehaviour
     [SerializeField] private Text UpText;
     [SerializeField] private Text DownText;
 
-    //private CircularBuffer<int> UploadBuffer;
-    //private CircularBuffer<int> UploadBuffer;
+    private uint upCount = 0;
+    private uint downCount = 0;
 
     private void Awake()
     {
-        //UploadBuffer = new CircularBuffer<int>(BufferSize);
+        OnAwake?.Invoke(this);
+    }
+
+    private void Start()
+    {
+        if (Client != null)
+        {
+            Client.PacketSent += bytes => upCount += (uint)bytes.Length;
+            Client.PacketReceived += bytes => downCount += (uint) bytes.Length;
+            
+            StartCoroutine(UpdateEverySecond());
+        }
     }
 
     private void Update()
     {
         if (Client != null)
         {
-            
+            RTTText.text = "RTT: " + Client.GetRTT() + " ms";
         }
     }
 
-    private void UpdateRTT(int rtt)
+    private IEnumerator UpdateEverySecond()
     {
-        RTTText.text = "RTT: " + rtt + " ms";
-    }
-    private void UpdateUpText(int rtt)
-    {
-        RTTText.text = "RTT: " + rtt + " ms";
+        while (true)
+        {
+            yield return new WaitForSeconds(1f);
+            
+            UpText.text = "Up: " + upCount + " bytes/s";
+            DownText.text = "Down: " + downCount + " bytes/s";
+
+            upCount = 0;
+            downCount = 0;
+        }
     }
 }

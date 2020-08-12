@@ -14,6 +14,8 @@ public class ClientInput : MonoBehaviour
     private Transform _transform;
     
     private Inputs _clientInputs;
+
+    private Vector3 _delta;
     // Accessed by dirty state transport to send to the server what inputs the client has pressed
     public Inputs ClientInputs
     {
@@ -22,12 +24,9 @@ public class ClientInput : MonoBehaviour
 
 
     private CharacterController _cc;
-    private Vector3 targetPostion;
-    // An approximation of dirty state's lerpT, reset every time a packet is sent
-    private float lerpT = 0;
-    private Vector3 previousTargetPosition;
-    private Vector3 lerpedTargetPostion;
     
+    // Stores a history of the positions we predicted for the owner for recent
+    // server states
     private CircularBuffer<InputState> _inputStates;
 
     // Records the predicted position made on a client for each state
@@ -49,17 +48,17 @@ public class ClientInput : MonoBehaviour
         DirtyStateTransport.ServerPositionReceived += DirtyStateTransportOnServerPositionReceived;
         
         _inputStates = new CircularBuffer<InputState>(InputStateBufferSize);
-        targetPostion = transform.position;
-        previousTargetPosition = _transform.position;
     }
 
     private void DirtyStateTransportOnServerPositionReceived(ushort stateId, Vector3 serverPosition)
     {
+        // Search for the owner's predicted state in the circular buffer that has a matching stateId
+        // Calculate the distance between what the server says the position should be and the actual
+        // position and decide if the distance is big enough to declare a desync
         int bufferSize = _inputStates.Size;
         for (int i = 0; i < bufferSize; i++)
         {
-            // TEMP: MINUS 1?
-            if (_inputStates[i].id == stateId - 1)
+            if (_inputStates[i].id == stateId)
             {
                 float distance = Vector3.Distance(serverPosition, _inputStates[i].position);
                 bool desync = distance > AcceptablePredictionErrorDistance;
@@ -67,8 +66,6 @@ public class ClientInput : MonoBehaviour
                 // TODO: Correct the desync
                 if (desync)
                     Debug.Log("Desync! Client: " + _inputStates[i].position + ", Server: " + serverPosition + ", Distance: " + distance);
-                // else
-                //     Debug.Log("Sync!");
 
                 break;
             }
@@ -77,18 +74,18 @@ public class ClientInput : MonoBehaviour
 
     private void DirtyStateTransportOnPreClientInputSend(ushort stateId)
     {
-        lerpT = 0;
-        previousTargetPosition = targetPostion;
-
         // Change the direction that the client moves
         int horizontal = (_clientInputs.D ? 1 : 0) - (_clientInputs.A ? 1 : 0);
         int vertical = (_clientInputs.W ? 1 : 0) - (_clientInputs.S ? 1 : 0);
-        targetPostion += _transform.rotation * new Vector3(horizontal, 0, vertical) * (1 / DirtyStateTransport.InputSendRate);
-        
-        // Record position
+        _delta = _transform.rotation * new Vector3(horizontal, 0, vertical);
+
+        // Record the position of the player and the state we received from the server into a circular buffer
+        // Once the server state (stateId) changes, it goes into a new spot in the buffer
+        // and the position stored in the circular buffer will represent where we predicted our client
+        // should be based on the inputs we've captured
         InputState inputState;
         inputState.id = stateId;
-        inputState.position = targetPostion;
+        inputState.position = transform.position;
         // It is possible the server state hasn't changed, in this case, overwrite the input state record
         if (!_inputStates.IsEmpty && _inputStates.Front().id == stateId)
             _inputStates[0] = inputState;
@@ -117,15 +114,13 @@ public class ClientInput : MonoBehaviour
     {
         if (!Application.isFocused)
             return;
+
+        // Move in the direction decided by DirtyStateTransportOnPreClientInputSend
+        // It is a combination of all the keys the owner has pressed for this input window
+        // And the direction they were facing when the function was called
+        _cc.Move(_delta * Time.deltaTime);
         
-        // Will get to 0 in the time it takes for another input packet to be sent
-        lerpT += Time.deltaTime * DirtyStateTransport.InputSendRate;
-        // Calculate a position between the old target position and the new one
-        lerpedTargetPostion = Vector3.Lerp(previousTargetPosition, targetPostion, lerpT);
-        
-        // Move to the lerped target position (CC.Move needs a delta)
-        _cc.Move(lerpedTargetPostion - transform.position);
-        
+        // Collect inputs for DirtyStateTransportOnPreClientInputSend
         if (Input.GetKey(KeyCode.W))
             _clientInputs.W = true;
         if (Input.GetKey(KeyCode.A))
@@ -136,10 +131,11 @@ public class ClientInput : MonoBehaviour
             _clientInputs.D = true;
         
         
+        // Rotate the player model based on mouse movement
         _transform.Rotate(Vector3.up, Input.GetAxis("Mouse X"), Space.World);
         
         // Update camera position
-        _cameraTransform.position = _transform.position;
+        _cameraTransform.position = _transform.position + Vector3.up;
         _cameraTransform.Rotate(-Vector3.right, Input.GetAxis("Mouse Y"), Space.Self);
         _cameraTransform.Rotate(Vector3.up, Input.GetAxis("Mouse X"), Space.World);
     }

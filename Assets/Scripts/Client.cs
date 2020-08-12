@@ -93,7 +93,7 @@ public class Client
         _client.Dispose();
     }
 
-    public float GetRTT()
+    public uint GetRTT()
     {
         return _peer.RoundTripTime;
     }

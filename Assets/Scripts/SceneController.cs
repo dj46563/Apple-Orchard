@@ -14,9 +14,17 @@ public class SceneController
     {
         SceneManager.LoadSceneAsync("MenuUI", LoadSceneMode.Additive);
     }
-
     public void UnloadMenuUI()
     {
         SceneManager.UnloadSceneAsync("MenuUI");
+    }
+
+    public void LoadGameUI()
+    {
+        SceneManager.LoadScene("GameUI", LoadSceneMode.Additive);
+    }
+    public void UnloadGameUI()
+    {
+        SceneManager.UnloadSceneAsync("GameUI");
     }
 }

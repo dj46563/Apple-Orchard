@@ -6,7 +6,14 @@ using UnityEngine;
 public class FollowState : MonoBehaviour
 {
     public ushort? Id;
+    public bool IsServer = false;
     private bool _isOwner = false;
+    private CharacterController _cc;
+
+    private void Awake()
+    {
+        _cc = GetComponent<CharacterController>();
+    }
 
     public void SetOwner()
     {
@@ -15,8 +22,13 @@ public class FollowState : MonoBehaviour
 
     private void Update()
     {
+        if (IsServer)
+        {
+            transform.position = NetworkState.LatestEntityDict[Id.Value].Position;
+            transform.rotation = NetworkState.LatestEntityDict[Id.Value].Rotation;
+        }
         // Only move non owned entities
-        if (!_isOwner && Id != null && NetworkState.PreviousEntityDict.ContainsKey(Id.Value))
+        else if (!_isOwner && Id != null && NetworkState.PreviousEntityDict.ContainsKey(Id.Value))
         {
             // Interpolate position and rotation
             Vector3 previousPosition = NetworkState.PreviousEntityDict[Id.Value].Position;
@@ -24,7 +36,7 @@ public class FollowState : MonoBehaviour
             
             Quaternion previousRotation = NetworkState.PreviousEntityDict[Id.Value].Rotation;
             Quaternion latestRotation = NetworkState.LatestEntityDict[Id.Value].Rotation;
-
+            
             transform.position = Vector3.Lerp(previousPosition, latestPosition, DirtyStateTransport.LerpT);
             transform.rotation = Quaternion.Slerp(previousRotation, latestRotation, DirtyStateTransport.LerpT);
         }
