@@ -79,14 +79,14 @@ public class DeltaStateTransport : MonoBehaviour
         PlayerEntities[index] = updatedEntity;
     }
 
-    public void StartClient()
+    public void StartClient(uint playerId)
     {
         Client = new Client();
         Client.PacketReceived += ClientOnPacketReceived;
 
         latestDiff = default(DiffState); // Dummy value, latest diff will be replaced by the next received state packet
         
-        Client.Connect(Constants.DefaultRemoteHost, Constants.DefaultPort);
+        Client.Connect(Constants.DefaultRemoteHost, Constants.DefaultPort, playerId);
     }
 
     private void ClientOnPacketReceived(byte[] data)
@@ -356,6 +356,7 @@ public class DeltaStateTransport : MonoBehaviour
             inputs.S = Input.GetKey(KeyCode.S);
             inputs.D = Input.GetKey(KeyCode.D);
             inputs.Space = Input.GetKey(KeyCode.Space);
+            inputs.E = Input.GetKey(KeyCode.E);
 
             InputPacket inputPacket;
             inputPacket.id = currentPacketId++;

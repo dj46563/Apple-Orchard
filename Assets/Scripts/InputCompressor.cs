@@ -12,6 +12,7 @@ public static class InputCompressor
         public bool S;
         public bool D;
         public bool Space;
+        public bool E;
         
         public void ClearInputs()
         {
@@ -20,16 +21,18 @@ public static class InputCompressor
             S = false;
             D = false;
             Space = false;
+            E = false;
         }
     }
     
     public static byte CompressInput(Inputs inputs)
     {
-        byte inputByte = (byte)(Convert.ToByte(inputs.W) |
-                       Convert.ToByte(inputs.A) << 1 |
-                       Convert.ToByte(inputs.S) << 2 |
-                       Convert.ToByte(inputs.D) << 3 |
-                       Convert.ToByte(inputs.Space) << 4);
+        byte inputByte = (byte) (Convert.ToByte(inputs.W) |
+                                 Convert.ToByte(inputs.A) << 1 |
+                                 Convert.ToByte(inputs.S) << 2 |
+                                 Convert.ToByte(inputs.D) << 3 |
+                                 Convert.ToByte(inputs.Space) << 4 |
+                                 Convert.ToByte(inputs.E) << 5);
         return inputByte;
     }
 
@@ -41,6 +44,7 @@ public static class InputCompressor
         inputs.S = Convert.ToBoolean(inputByte & (1 << 2));
         inputs.D = Convert.ToBoolean(inputByte & (1 << 3));
         inputs.Space = Convert.ToBoolean(inputByte & (1 << 4));
+        inputs.E = Convert.ToBoolean(inputByte & (1 << 5));
 
         return inputs;
     }

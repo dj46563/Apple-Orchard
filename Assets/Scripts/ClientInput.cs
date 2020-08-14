@@ -129,6 +129,10 @@ public class ClientInput : MonoBehaviour
             _clientInputs.S = true;
         if (Input.GetKey(KeyCode.D))
             _clientInputs.D = true;
+        if (Input.GetKey(KeyCode.Space))
+            _clientInputs.Space = true;
+        if (Input.GetKey(KeyCode.E))
+            _clientInputs.E = true;
         
         
         // Rotate the player model based on mouse movement

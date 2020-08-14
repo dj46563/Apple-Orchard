@@ -11,4 +11,6 @@ public static class Constants
     public static readonly ushort DefaultPort = 12400;
     public static readonly ushort ChannelLimit = 2;
     public static readonly int StateBufferSize = 5;
+    public static readonly string PHPServerHost = "35.155.38.16";
+    public static readonly uint LocalPlayerId = uint.MaxValue;
 }

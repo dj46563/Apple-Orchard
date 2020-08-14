@@ -6,6 +6,7 @@ using ENet;
 using UnityEngine;
 using K4os.Compression.LZ4;
 using K4os.Compression.LZ4.Encoders;
+using UnityEngine.Networking;
 using EventType = ENet.EventType;
 
 public class Server
@@ -80,6 +81,25 @@ public class Server
                     _peerDict[_netEvent.Peer.ID] = _netEvent.Peer;
                     PeerConnected?.Invoke(_netEvent.Peer.ID);
                     Debug.Log("Client connected - ID: " + _netEvent.Peer.ID + ", IP: " + _netEvent.Peer.IP);
+                    
+                    uint playerId = _netEvent.Data;
+                    // REMOTE CLIENT CONNECTED
+                    if (playerId != Constants.LocalPlayerId)
+                    {
+                        // Get their player info using their db player id
+                        WWWForm form = new WWWForm();
+                        form.AddField("id", playerId.ToString());
+
+                        uint peerId = _netEvent.Peer.ID;
+                        string peerIp = _netEvent.Peer.IP;
+                        
+                        UnityWebRequest www = UnityWebRequest.Post(Constants.PHPServerHost + "/getPlayerInfo.php", form);
+                        www.SendWebRequest().completed += operation =>
+                        {
+                            PlayerInfo info = JsonUtility.FromJson<PlayerInfo>(www.downloadHandler.text);
+                            Debug.Log("Remote client conncted - ID: " + peerId + ", IP: " + peerIp + ", Username: " + info.username + ", Apples: " + info.apples);
+                        };
+                    }
                     break;
                 case EventType.Disconnect:
                     _peerDict.Remove(_netEvent.Peer.ID);
@@ -104,5 +124,12 @@ public class Server
     {
         _server.Flush();
         _server.Dispose();
+    }
+
+    private struct PlayerInfo
+    {
+        public int id;
+        public string username;
+        public int apples;
     }
 }

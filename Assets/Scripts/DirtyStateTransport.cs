@@ -36,10 +36,13 @@ public class DirtyStateTransport : MonoBehaviour
     // SERVER ONLY
     // Keeps track of the last input packet that each client sent
     private Dictionary<ushort, ClientInputRecord> ClientInputHistory = new Dictionary<ushort, ClientInputRecord>();
+    // Keeps track of all the apple pickings and spawnings, is reset after it is sent out
+    private AppleState _appleState = AppleState.InitialPacket();
     
     // CLIENT ONLY
     private ushort _clientOwnedId;
     private GameObject _clientOwnedObject;
+    private Transform _clientOwnedCamera;
     private bool _clientInitialized;
     // Reference to the previous input packet, to determine if rotation is dirty
     private InputPacket _previousInputPacket = InputPacket.InitialPacket();
@@ -51,7 +54,19 @@ public class DirtyStateTransport : MonoBehaviour
         Server.PeerDisconncted += ServerOnPeerDisconncted;
         Server.PacketReceived += ServerOnPacketReceived;
         
+        TreeBehavior.ApplePicked += TreeBehaviorOnApplePicked;
+        
         Server.Listen(Constants.DefaultPort);
+    }
+    
+    // Event is raised by a tree when one of its apples has been picked
+    private void TreeBehaviorOnApplePicked(byte treeId, byte appleId)
+    {
+        AppleState.AppleStateEntry entry;
+        entry.picked = true;
+        entry.appleId = appleId;
+        entry.treeId = treeId;
+        _appleState.changes.Add(entry);
     }
 
     private void ServerOnPacketReceived(byte[] data, uint senderId)
@@ -63,6 +78,8 @@ public class DirtyStateTransport : MonoBehaviour
         
         InputPacket inputPacket = InputPacket.Deserialize(data, ClientInputHistory[(ushort)senderId]);
         InputCompressor.Inputs inputs = InputCompressor.DecompressInput(inputPacket.inputByte);
+
+        Transform ownerTransform = NetworkedObjects[(ushort) senderId].transform;
 
         // Check it against the client input history
         if (ClientInputHistory.ContainsKey((ushort) senderId))
@@ -108,12 +125,30 @@ public class DirtyStateTransport : MonoBehaviour
             entity.Rotation = inputPacket.rotation;
         }
 
+        // Full up and down rotations are passed, we only want to transform our inputs by the y axis of the rotation
+        Quaternion yRotation = Quaternion.Euler(0, entity.Rotation.eulerAngles.y, 0);
         // Calculate the delta of their position
-        Vector3 delta = entity.Rotation * new Vector3(horizontal, 0, vertical) * multiplier * (1 / InputSendRate);
+        Vector3 delta = yRotation * new Vector3(horizontal, 0, vertical) * multiplier * (1 / InputSendRate);
         // Move in that direction while simulating collisions
         NetworkedObjects[(ushort) senderId].GetComponent<CharacterController>().Move(delta);
         // Update the NetworkState to this new position
-        entity.Position = NetworkedObjects[(ushort) senderId].transform.position;
+        entity.Position = ownerTransform.position;
+        
+        // If E was used, raycast for interactions
+        if (inputs.E)
+        {
+            RaycastHit hit;
+            Debug.DrawRay(ownerTransform.position + Vector3.up, entity.Rotation * Vector3.forward * 1.5f, Color.red, 2f);
+            if (Physics.Raycast(ownerTransform.position + Vector3.up, entity.Rotation * Vector3.forward, out hit, 1.5f))
+            {
+                AppleBehavior apple = hit.collider.GetComponent<AppleBehavior>();
+                if (apple)
+                {
+                    Debug.Log("Hit");
+                    apple.Use();
+                }
+            }
+        }
     }
 
     private void ServerOnPeerDisconncted(uint id)
@@ -164,12 +199,13 @@ public class DirtyStateTransport : MonoBehaviour
         ClientInputHistory[(ushort)id] = ClientInputRecord.InitialRecord();
     }
 
-    public void StartClient(string host)
+    public void StartClient(string host, uint playerId)
     {
         Client = new Client();
         Client.PacketReceived += ClientOnPacketReceived;
-        
-        Client.Connect(host, Constants.DefaultPort);
+
+        Client.Connected += () => {  };
+        Client.Connect(host, Constants.DefaultPort, playerId);
     }
 
     private void ClientOnPacketReceived(byte[] data)
@@ -211,6 +247,8 @@ public class DirtyStateTransport : MonoBehaviour
                 // Disable rendering of the player model for the owner client
                 _clientOwnedObject.GetComponent<DisableRendering>().Disable();
 
+                // Grab the client's camera (the only camera in the scene)
+                _clientOwnedCamera = Camera.main.transform;
                 // Client is now initialized
                 _clientInitialized = true;
                 break;
@@ -225,6 +263,15 @@ public class DirtyStateTransport : MonoBehaviour
             case StatePacket.PacketType.Disconnect:
                 Destroy(NetworkedObjects[id]);
                 NetworkedObjects.Remove(id);
+                break;
+            case StatePacket.PacketType.AppleState:
+                AppleState appleState = AppleState.Deserialize(data);
+                foreach (var change in appleState.changes)
+                {
+                    if (change.picked)
+                        TreeBehavior.Trees[change.treeId].HideApple(change.appleId);
+                }
+
                 break;
         }
         
@@ -252,6 +299,10 @@ public class DirtyStateTransport : MonoBehaviour
                 statePacket.packetType = StatePacket.PacketType.State;
                 statePacket.id = currentPacketId++;
                 Server.BroadcastBytes(statePacket.Serialize());
+                
+                // Tell everyone the apple state changes we have collected then reset
+                Server.BroadcastBytes(_appleState.Serialize());
+                _appleState = AppleState.InitialPacket();
             }
         }
         else if (Client != null && _clientInitialized)
@@ -265,7 +316,7 @@ public class DirtyStateTransport : MonoBehaviour
                 
                 // Grab the inputs recorder by Client input and send them
                 InputCompressor.Inputs inputs = _clientOwnedObject.GetComponent<ClientInput>().ClientInputs;
-                InputPacket inputPacket = InputPacket.ComposePacket(currentPacketId, inputs, _clientOwnedObject.transform.rotation);
+                InputPacket inputPacket = InputPacket.ComposePacket(currentPacketId, inputs, _clientOwnedCamera.transform.rotation);
 
                 Client.SendBytes(inputPacket.Serialize(_previousInputPacket));
                 ++currentPacketId;
@@ -294,7 +345,7 @@ public class DirtyStateTransport : MonoBehaviour
 
     private class StatePacket
     {
-        public enum PacketType : byte {Connect, Disconnect, State, InitialState}
+        public enum PacketType : byte {Connect, Disconnect, State, InitialState, AppleState}
 
         public PacketType packetType;
         public ushort id;
@@ -324,7 +375,7 @@ public class DirtyStateTransport : MonoBehaviour
                     break;
             }
             
-            return stream.CloneAsMemoryStream().ToArray();
+            return stream.GetStreamData();
         }
 
         // Grab the packet type off the first byte
@@ -448,7 +499,7 @@ public class DirtyStateTransport : MonoBehaviour
                 stream.WriteInt16(FloatQuantize.QuantizeFloat(rotation.w, 32767));
             }
             
-            return stream.CloneAsMemoryStream().ToArray();
+            return stream.GetStreamData();
         }
 
         public static InputPacket ComposePacket(ushort currentPacketId, InputCompressor.Inputs inputs, Quaternion rotation)
@@ -476,6 +527,67 @@ public class DirtyStateTransport : MonoBehaviour
             record.rotation = Quaternion.identity;
 
             return record;
+        }
+    }
+
+    private struct AppleState
+    {
+        private StatePacket.PacketType type;
+        public List<AppleStateEntry> changes;
+        public struct AppleStateEntry
+        {
+            // picked vs spawned
+            public bool picked;
+            public byte treeId;
+            public byte appleId;
+        }
+
+        public static AppleState InitialPacket()
+        {
+            AppleState appleState;
+            appleState.type = StatePacket.PacketType.AppleState;
+            appleState.changes = new List<AppleStateEntry>();
+            return appleState;
+        }
+        
+        public byte[] Serialize()
+        {
+            byte[] bytes = new byte[1];
+            BitStream stream = new BitStream(bytes);
+            stream.AutoIncreaseStream = true;
+            
+            stream.WriteByte((byte)type);
+            stream.WriteUInt16((ushort)changes.Count);
+            foreach (var change in changes)
+            {
+                stream.WriteBit(change.picked);
+                stream.WriteByte(change.treeId);
+                stream.WriteByte(change.appleId);
+            }
+
+            return stream.GetStreamData();
+        }
+
+        public static AppleState Deserialize(byte[] data)
+        {
+            BitStream stream = new BitStream(data);
+            ushort type = stream.ReadByte();
+            ushort length = stream.ReadUInt16();
+            List<AppleStateEntry> changes = new List<AppleStateEntry>();
+            for (int i = 0; i < length; i++)
+            {
+                AppleStateEntry entry;
+                entry.picked = stream.ReadBit();
+                entry.treeId = stream.ReadByte();
+                entry.appleId = stream.ReadByte();
+                
+                changes.Add(entry);
+            }
+
+            AppleState appleState;
+            appleState.type = StatePacket.PacketType.AppleState;
+            appleState.changes = changes;
+            return appleState;
         }
     }
 }

@@ -5,11 +5,6 @@ using UnityEngine.SceneManagement;
 
 public class SceneController
 {
-    public SceneController()
-    {
-        LoadMenuUI();
-    }
-    
     public void LoadMenuUI()
     {
         SceneManager.LoadSceneAsync("MenuUI", LoadSceneMode.Additive);
@@ -26,5 +21,14 @@ public class SceneController
     public void UnloadGameUI()
     {
         SceneManager.UnloadSceneAsync("GameUI");
+    }
+
+    public void LoadLoginUI()
+    {
+        SceneManager.LoadScene("LoginUI", LoadSceneMode.Additive);
+    }
+    public void UnloadLoginUI()
+    {
+        SceneManager.UnloadSceneAsync("LoginUI");
     }
 }

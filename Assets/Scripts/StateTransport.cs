@@ -123,6 +123,7 @@ public class StateTransport : MonoBehaviour
         inputs.S = Input.GetKey(KeyCode.S);
         inputs.D = Input.GetKey(KeyCode.D);
         inputs.Space = Input.GetKey(KeyCode.Space);
+        inputs.E = Input.GetKey(KeyCode.E);
 
         InputPacket inputPacket;
         inputPacket.id = currentPacketId++;

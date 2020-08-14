@@ -25,7 +25,7 @@ public class FollowState : MonoBehaviour
         if (IsServer)
         {
             transform.position = NetworkState.LatestEntityDict[Id.Value].Position;
-            transform.rotation = NetworkState.LatestEntityDict[Id.Value].Rotation;
+            transform.rotation = LockRotationToY(NetworkState.LatestEntityDict[Id.Value].Rotation);
         }
         // Only move non owned entities
         else if (!_isOwner && Id != null && NetworkState.PreviousEntityDict.ContainsKey(Id.Value))
@@ -34,12 +34,17 @@ public class FollowState : MonoBehaviour
             Vector3 previousPosition = NetworkState.PreviousEntityDict[Id.Value].Position;
             Vector3 latestPosition = NetworkState.LatestEntityDict[Id.Value].Position;
             
-            Quaternion previousRotation = NetworkState.PreviousEntityDict[Id.Value].Rotation;
-            Quaternion latestRotation = NetworkState.LatestEntityDict[Id.Value].Rotation;
+            Quaternion previousRotation = LockRotationToY(NetworkState.PreviousEntityDict[Id.Value].Rotation);
+            Quaternion latestRotation = LockRotationToY(NetworkState.LatestEntityDict[Id.Value].Rotation);
             
             transform.position = Vector3.Lerp(previousPosition, latestPosition, DirtyStateTransport.LerpT);
             transform.rotation = Quaternion.Slerp(previousRotation, latestRotation, DirtyStateTransport.LerpT);
         }
             
+    }
+
+    private Quaternion LockRotationToY(Quaternion rotation)
+    {
+        return Quaternion.Euler(0, rotation.eulerAngles.y, 0);
     }
 }

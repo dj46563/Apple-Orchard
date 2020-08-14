@@ -25,12 +25,13 @@ public class Client
 
     private ushort _packetCount = 0;
 
-    public void Connect(string host, ushort port)
+    public void Connect(string host, ushort port, uint playerId)
     {
         _address.Port = port;
         _address.SetHost(host);
         _client.Create();
-        _peer = _client.Connect(_address, Constants.ChannelLimit);
+        
+        _peer = _client.Connect(_address, Constants.ChannelLimit, playerId);
     }
 
     public void SendBytes(byte[] data)
