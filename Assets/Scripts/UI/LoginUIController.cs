@@ -7,8 +7,8 @@ using UnityEngine.UI;
 
 public class LoginUIController : MonoBehaviour
 {
-    // Raised when login is successful, arguments are the username and the user id
-    public static Action<string, uint> OnLoginSuccess;
+    // Raised when login is successful, arguments are the username and the hash
+    public static Action<string, string> OnLoginSuccess;
     
     [SerializeField] private InputField _displayName;
     [SerializeField] private InputField _password;
@@ -94,7 +94,7 @@ public class LoginUIController : MonoBehaviour
         }
     }
 
-    private IEnumerator Login(string username, string password, Action<string, uint> successEvent)
+    private IEnumerator Login(string username, string password, Action<string, string> successEvent)
     {
         WWWForm form = new WWWForm();
         form.AddField("username", username);
@@ -111,8 +111,9 @@ public class LoginUIController : MonoBehaviour
             }
             else
             {
+                string hash = www.downloadHandler.text;
                 Debug.Log("Login complete");
-                successEvent.Invoke(username, UInt32.Parse(www.downloadHandler.text));
+                successEvent.Invoke(username, hash);
             }
         }
     }

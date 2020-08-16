@@ -15,14 +15,14 @@ public class GameController : MonoBehaviour
     [SerializeField] private Camera GameCamera;
 
     private string _username;
-    private uint _playerId;
+    private string _playerHash;
     
     // Start is called before the first frame update
     void Awake()
     {
         MenuController.OnHostPressed += Host;
-        MenuController.OnLocalConnectPressed += () => Connect(Constants.DefaultLocalHost, _playerId);
-        MenuController.OnRemoteConnectPressed += () => Connect(Constants.DefaultRemoteHost, _playerId);
+        MenuController.OnLocalConnectPressed += () => Connect(Constants.DefaultLocalHost, _playerHash);
+        MenuController.OnRemoteConnectPressed += () => Connect(Constants.DefaultRemoteHost, _playerHash);
 
         _transport = gameObject.AddComponent<DirtyStateTransport>();
         _transport.PlayerPrefab = PlayerPrefab;
@@ -36,15 +36,15 @@ public class GameController : MonoBehaviour
         else
         {
             _sceneController.LoadLoginUI();
-            LoginUIController.OnLoginSuccess += (username, id) =>
+            LoginUIController.OnLoginSuccess += (username, hash) =>
             {
-                _playerId = id;
+                _playerHash = hash;
                 _username = username;
                 
                 _sceneController.UnloadLoginUI();
                 if (Constants.AutoConnect)
                 {
-                    Connect(Constants.DefaultRemoteHost, _playerId);
+                    Connect(Constants.DefaultRemoteHost, _playerHash);
                 }
                 else
                 {
@@ -56,9 +56,10 @@ public class GameController : MonoBehaviour
 
     // TODO: Move this stuff below, into the DeltaStateTransport
 
-    private void Connect(string host, uint playerId)
+    private void Connect(string host, string playerHash)
     {
-        _transport.StartClient(host, playerId);
+        Client.ConnectData connectData = new Client.ConnectData(playerHash);
+        _transport.StartClient(host, connectData);
         
         _transport.Client.Connected += () =>
         {
@@ -78,6 +79,7 @@ public class GameController : MonoBehaviour
     private void Host()
     {
         _transport.StartServer();
-        _sceneController.UnloadMenuUI();
+        if (!Application.isBatchMode)
+            _sceneController.UnloadMenuUI();
     }
 }

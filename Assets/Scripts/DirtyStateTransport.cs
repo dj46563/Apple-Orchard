@@ -4,13 +4,18 @@ using System.Collections.Generic;
 using System.Security.Cryptography;
 using ENet;
 using UnityEngine;
+using UnityEngine.Networking;
+using Utils;
 using BitStream = BitStreams.BitStream;
 
 public class DirtyStateTransport : MonoBehaviour
 {
     public static readonly float InputSendRate = 20;
     public static readonly float StateSendRate = 5;
+    // How much of a difference in rotation warrants a packet updating the rotation
     public static readonly float RotationDifferenceAngleThreshold = 0.1f;
+    // How often should the database gets updated
+    public static readonly float AppleDatabaseUpdateTime = 10f;
 
     // Happens right before the input packet is created then sent, ushort is the latestPacketReceived
     public static event Action<ushort> PreClientInputSend;
@@ -32,12 +37,17 @@ public class DirtyStateTransport : MonoBehaviour
     public GameObject PlayerPrefab;
     
     private Dictionary<ushort, GameObject> NetworkedObjects = new Dictionary<ushort, GameObject>();
+    private Dictionary<ushort, string> EntityNames = new Dictionary<ushort, string>();
+    private Dictionary<ushort, ushort> EntityApples = new Dictionary<ushort, ushort>();
 
     // SERVER ONLY
     // Keeps track of the last input packet that each client sent
     private Dictionary<ushort, ClientInputRecord> ClientInputHistory = new Dictionary<ushort, ClientInputRecord>();
+    // Keeps track of whos apple counts need to be updated in the database, key is the network id, value is the name and apples
+    private Dictionary<ushort, Tuple<string, ushort>> ApplePickers = new Dictionary<ushort, Tuple<string, ushort>>();
     // Keeps track of all the apple pickings and spawnings, is reset after it is sent out
     private AppleState _appleState = AppleState.InitialPacket();
+    private float _dbUpdateTimer = 0;
     
     // CLIENT ONLY
     private ushort _clientOwnedId;
@@ -144,8 +154,9 @@ public class DirtyStateTransport : MonoBehaviour
                 AppleBehavior apple = hit.collider.GetComponent<AppleBehavior>();
                 if (apple)
                 {
-                    Debug.Log("Hit");
+                    ushort applesPicked = NetworkState.EntityPickedApple((ushort)senderId);
                     apple.Use();
+                    ApplePickers[(ushort)senderId] = new Tuple<string, ushort>(EntityNames[(ushort)senderId], applesPicked);
                 }
             }
         }
@@ -167,45 +178,81 @@ public class DirtyStateTransport : MonoBehaviour
         NetworkState.LatestEntityDict.Remove((ushort)id);
     }
 
-    private void ServerOnPeerConnected(uint id)
+    private void ServerOnPeerConnected(uint id, Client.ConnectData connectData)
     {
-        GameObject obj = Instantiate(PlayerPrefab);
-        FollowState followState = obj.GetComponent<FollowState>();
-        followState.Id = (ushort)id;
-        followState.IsServer = true;
-        NetworkedObjects[(ushort) id] = obj;
-
-        NetworkEntity2 entity = new NetworkEntity2()
+        // Get their player info using their db player id
+        // Put it into their nametag
+        // Wait to do pretty much everything until the info comes back
+        PlayerInfo.GetPlayerInfo(connectData.hash, info =>
         {
-            id = (ushort) id,
-            Position = obj.transform.position,
-            Rotation = obj.transform.rotation
-        };
-        NetworkState.LatestEntityDict[(ushort)id] = entity;
+            GameObject obj = Instantiate(PlayerPrefab);
+            FollowState followState = obj.GetComponent<FollowState>();
+            followState.Id = (ushort)id;
+            followState.IsServer = true;
+            NetworkedObjects[(ushort) id] = obj;
+            
+            obj.GetComponentInChildren<TextMesh>().text = info.username + ": " + info.apples;
+            
+            NetworkEntity2 entity = new NetworkEntity2()
+            {
+                id = (ushort) id,
+                Position = obj.transform.position,
+                Rotation = obj.transform.rotation
+            };
+            NetworkState.LatestEntityDict[(ushort)id] = entity;
+            
+            // Set the name and apples of this entity
+            NetworkState.SetEntityNameAndApples((ushort)id, info.username, (ushort)info.apples);
 
-        StatePacket connectPacket = new StatePacket();
-        connectPacket.packetType = StatePacket.PacketType.Connect;
-        connectPacket.id = (ushort)id;
-        // Broadcast the connection to all peers except for the peer that is connecting
-        // They will receive their Instantiation in their initial state packet
-        Server.BroadcastBytesToEveryoneExcept(connectPacket.Serialize(), id);
+            StatePacket connectPacket = new StatePacket();
+            connectPacket.packetType = StatePacket.PacketType.Connect;
+            connectPacket.id = (ushort)id;
+            // Broadcast the connection to all peers except for the peer that is connecting
+            // They will receive their Instantiation in their initial state packet
+            Server.BroadcastBytesToEveryoneExcept(connectPacket.Serialize(), id);
 
-        StatePacket initialStatePacket = new StatePacket();
-        initialStatePacket.packetType = StatePacket.PacketType.InitialState;
-        initialStatePacket.id = currentPacketId;
-        initialStatePacket.clientId = (ushort) id;
-        Server.BroadcastBytesTo(initialStatePacket.Serialize(), id);
+            StatePacket initialStatePacket = new StatePacket();
+            initialStatePacket.packetType = StatePacket.PacketType.InitialState;
+            initialStatePacket.id = currentPacketId;
+            initialStatePacket.clientId = (ushort) id;
+            Server.BroadcastBytesTo(initialStatePacket.Serialize(), id);
+            
+            // Send them the initial apple state, which says for every apple, if it is picked or not
+            InitialAppleState initialAppleState;
+            Server.BroadcastBytesTo(initialAppleState.Serialize(), id);
         
-        ClientInputHistory[(ushort)id] = ClientInputRecord.InitialRecord();
+            ClientInputHistory[(ushort)id] = ClientInputRecord.InitialRecord();
+            EntityNames[(ushort) id] = info.username;
+        });
     }
 
-    public void StartClient(string host, uint playerId)
+    public void StartClient(string host, Client.ConnectData connectData)
     {
         Client = new Client();
         Client.PacketReceived += ClientOnPacketReceived;
+        
+        NetworkEntity2.EntityApplesUpdate += NetworkEntity2OnEntityApplesUpdate;
+        NetworkEntity2.EntityNameUpdate += NetworkEntity2OnEntityNameUpdate;
+        
+        Client.Connect(host, Constants.DefaultPort, connectData);
+    }
 
-        Client.Connected += () => {  };
-        Client.Connect(host, Constants.DefaultPort, playerId);
+    private void NetworkEntity2OnEntityNameUpdate(ushort id, string name)
+    {
+        EntityNames[id] = name;
+        if (!EntityApples.ContainsKey(id))
+            EntityApples[id] = 0;
+        if (NetworkedObjects.ContainsKey(id))
+            NetworkedObjects[id].GetComponentInChildren<TextMesh>().text = name + ": " + EntityApples[id];
+    }
+    
+    private void NetworkEntity2OnEntityApplesUpdate(ushort id, ushort apples)
+    {
+        EntityApples[id] = apples;
+        if (!EntityNames.ContainsKey(id))
+            EntityNames[id] = "";
+        if (NetworkedObjects.ContainsKey(id))
+            NetworkedObjects[id].GetComponentInChildren<TextMesh>().text = EntityNames[id] + ": " + apples;
     }
 
     private void ClientOnPacketReceived(byte[] data)
@@ -239,6 +286,8 @@ public class DirtyStateTransport : MonoBehaviour
                     {
                         obj.AddComponent<ClientInput>();
                     }
+                    
+                    obj.GetComponentInChildren<TextMesh>().text = pair.Value.name + ": " + pair.Value.apples;
                 }
                 
                 _clientOwnedObject = NetworkedObjects[_clientOwnedId];
@@ -259,6 +308,9 @@ public class DirtyStateTransport : MonoBehaviour
                 obj = Instantiate(PlayerPrefab);
                 obj.GetComponent<FollowState>().Id = id;
                 NetworkedObjects[id] = obj;
+                
+                // Update their name tag
+                obj.GetComponentInChildren<TextMesh>().text = NetworkState.LatestEntityDict[id].name + ": " + NetworkState.LatestEntityDict[id].apples;
                 break;
             case StatePacket.PacketType.Disconnect:
                 Destroy(NetworkedObjects[id]);
@@ -272,6 +324,10 @@ public class DirtyStateTransport : MonoBehaviour
                         TreeBehavior.Trees[change.treeId].HideApple(change.appleId);
                 }
 
+                break;
+            case StatePacket.PacketType.InitialAppleState:
+                // Deserialize will automatically update all the trees
+                InitialAppleState.Deserialize(data);
                 break;
         }
         
@@ -291,6 +347,37 @@ public class DirtyStateTransport : MonoBehaviour
         _timer += Time.deltaTime;
         if (Server != null)
         {
+            _dbUpdateTimer += Time.deltaTime;
+
+            // Update the database with the new apple values
+            if (_dbUpdateTimer >= AppleDatabaseUpdateTime && ApplePickers.Count > 0)
+            {
+                _dbUpdateTimer = 0;
+                DbAppleUpdate update;
+                int count = ApplePickers.Count;
+                update.usernames = new string[count];
+                update.apples = new int[count];
+                int i = 0;
+                foreach (var pickers in ApplePickers.Values)
+                {
+                    update.usernames[i] = pickers.Item1;
+                    update.apples[i] = pickers.Item2;
+                    i++;
+                }
+
+                string json = JsonUtility.ToJson(update);
+                WWWForm form = new WWWForm();
+                form.AddField("json", json);
+                        
+                UnityWebRequest www = UnityWebRequest.Post(Constants.PHPServerHost + "/updateApples.php", form);
+                www.SendWebRequest().completed += operation =>
+                {
+                    Debug.Log("Server update complete: " + www.downloadHandler.text);
+                };
+                
+                ApplePickers.Clear();
+            }
+            
             if (_timer >= 1 / StateSendRate)
             {
                 _timer = 0;
@@ -345,7 +432,7 @@ public class DirtyStateTransport : MonoBehaviour
 
     private class StatePacket
     {
-        public enum PacketType : byte {Connect, Disconnect, State, InitialState, AppleState}
+        public enum PacketType : byte {Connect, Disconnect, State, InitialState, AppleState, InitialAppleState}
 
         public PacketType packetType;
         public ushort id;
@@ -530,6 +617,40 @@ public class DirtyStateTransport : MonoBehaviour
         }
     }
 
+    private struct InitialAppleState
+    {
+        // Encoding: packet type, number of trees, then each trees apple active bit mask
+        public byte[] Serialize()
+        {
+            byte[] data = new byte[TreeBehavior.Trees.Length];
+            BitStream stream = new BitStream(data);
+            stream.AutoIncreaseStream = true;
+            
+            stream.WriteByte((byte)StatePacket.PacketType.InitialAppleState);
+            stream.WriteByte((byte)TreeBehavior.Trees.Length);
+            foreach (var tree in TreeBehavior.Trees)
+            {
+                stream.WriteByte(tree.GetAppleMask());
+            }
+
+            return stream.GetStreamData();
+        }
+
+        public static void Deserialize(byte[] data)
+        {
+            BitStream stream = new BitStream(data);
+            
+            StatePacket.PacketType type = (StatePacket.PacketType)stream.ReadByte();
+            byte length = stream.ReadByte();
+
+            for (int i = 0; i < length; i++)
+            {
+                byte mask = stream.ReadByte();
+                TreeBehavior.Trees[i].SetApples(mask);
+            }
+        }
+    }
+
     private struct AppleState
     {
         private StatePacket.PacketType type;
@@ -589,5 +710,11 @@ public class DirtyStateTransport : MonoBehaviour
             appleState.changes = changes;
             return appleState;
         }
+    }
+
+    struct DbAppleUpdate
+    {
+        public string[] usernames;
+        public int[] apples;
     }
 }

@@ -9,10 +9,19 @@ public class FollowState : MonoBehaviour
     public bool IsServer = false;
     private bool _isOwner = false;
     private CharacterController _cc;
+    private Transform _cameraTransform;
+    private Transform _nametagTransform;
+    private bool _cameraNotNull;
+    private bool _nametagNotNull;
 
     private void Awake()
     {
         _cc = GetComponent<CharacterController>();
+
+        _cameraTransform = Camera.main.transform;
+        _nametagTransform = GetComponentInChildren<TextMesh>().transform;
+        _cameraNotNull = _cameraTransform != null;
+        _nametagNotNull = _nametagTransform != null;
     }
 
     public void SetOwner()
@@ -40,7 +49,12 @@ public class FollowState : MonoBehaviour
             transform.position = Vector3.Lerp(previousPosition, latestPosition, DirtyStateTransport.LerpT);
             transform.rotation = Quaternion.Slerp(previousRotation, latestRotation, DirtyStateTransport.LerpT);
         }
-            
+        
+        // Always have the nametag face the camera
+        if (_cameraNotNull && _nametagNotNull)
+        {
+            _nametagTransform.forward = -(_cameraTransform.position - _nametagTransform.position);
+        }
     }
 
     private Quaternion LockRotationToY(Quaternion rotation)

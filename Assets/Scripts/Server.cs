@@ -12,7 +12,7 @@ using EventType = ENet.EventType;
 public class Server
 {
     public event Action<byte[], uint> PacketReceived;
-    public event Action<uint> PeerConnected;
+    public event Action<uint, Client.ConnectData> PeerConnected;
     public event Action<uint> PeerDisconncted;
     
     private Host _server = new Host();
@@ -20,6 +20,7 @@ public class Server
     private ENet.Event _netEvent;
 
     private Dictionary<uint, Peer> _peerDict = new Dictionary<uint, Peer>();
+    private HashSet<uint> _peersWithoutConnectionData = new HashSet<uint>();
 
     public void Listen(ushort port, string host = null)
     {
@@ -44,7 +45,7 @@ public class Server
     public int BroadcastBytesTo(byte[] data, uint peerId)
     {
         Packet packet = default(Packet);
-        packet.Create(data);
+        packet.Create(data, PacketFlags.Reliable);
         _server.Broadcast(0, ref packet, new Peer[] { _peerDict[peerId] });
         
         return data.Length;
@@ -79,27 +80,8 @@ public class Server
                     break;
                 case EventType.Connect:
                     _peerDict[_netEvent.Peer.ID] = _netEvent.Peer;
-                    PeerConnected?.Invoke(_netEvent.Peer.ID);
-                    Debug.Log("Client connected - ID: " + _netEvent.Peer.ID + ", IP: " + _netEvent.Peer.IP);
-                    
-                    uint playerId = _netEvent.Data;
-                    // REMOTE CLIENT CONNECTED
-                    if (playerId != Constants.LocalPlayerId)
-                    {
-                        // Get their player info using their db player id
-                        WWWForm form = new WWWForm();
-                        form.AddField("id", playerId.ToString());
-
-                        uint peerId = _netEvent.Peer.ID;
-                        string peerIp = _netEvent.Peer.IP;
-                        
-                        UnityWebRequest www = UnityWebRequest.Post(Constants.PHPServerHost + "/getPlayerInfo.php", form);
-                        www.SendWebRequest().completed += operation =>
-                        {
-                            PlayerInfo info = JsonUtility.FromJson<PlayerInfo>(www.downloadHandler.text);
-                            Debug.Log("Remote client conncted - ID: " + peerId + ", IP: " + peerIp + ", Username: " + info.username + ", Apples: " + info.apples);
-                        };
-                    }
+                    _peersWithoutConnectionData.Add(_netEvent.Peer.ID);
+                    Debug.Log("Client connected (pre data) - ID: " + _netEvent.Peer.ID + ", IP: " + _netEvent.Peer.IP);
                     break;
                 case EventType.Disconnect:
                     _peerDict.Remove(_netEvent.Peer.ID);
@@ -109,10 +91,24 @@ public class Server
                 case EventType.Receive:
                     byte[] data = new byte[_netEvent.Packet.Length];
                     _netEvent.Packet.CopyTo(data);
-                    PacketReceived?.Invoke(data, _netEvent.Peer.ID);
+                    
+                    // If we haven't gotten the connection data packet from this client yet,
+                    // we can assume that this is the connection data packet
+                    if (_peersWithoutConnectionData.Contains(_netEvent.Peer.ID))
+                    { 
+                        Client.ConnectData connectData = Client.ConnectData.Deserialize(data);
+                        PeerConnected?.Invoke(_netEvent.Peer.ID, connectData);
+
+                        _peersWithoutConnectionData.Remove(_netEvent.Peer.ID);
+                    }
+                    else
+                    {
+                        PacketReceived?.Invoke(data, _netEvent.Peer.ID);
+                    }
                     break;
                 case EventType.Timeout:
                     Debug.Log("Client timed out - IP: " + _netEvent.Peer.IP);
+                    PeerDisconncted?.Invoke(_netEvent.Peer.ID);
                     break;
                 default:
                     break;
@@ -124,12 +120,5 @@ public class Server
     {
         _server.Flush();
         _server.Dispose();
-    }
-
-    private struct PlayerInfo
-    {
-        public int id;
-        public string username;
-        public int apples;
     }
 }

@@ -35,4 +35,19 @@ public static class NetworkState
         PreviousEntityDict = LatestEntityDict;
         LatestEntityDict = entityDict;
     }
+
+    public static ushort EntityPickedApple(ushort id)
+    {
+        LatestEntityDict[id].apples++;
+        LatestEntityDict[id].applesDirty = true;
+        return LatestEntityDict[id].apples;
+    }
+
+    public static void SetEntityNameAndApples(ushort id, string name, ushort apples)
+    {
+        LatestEntityDict[id].name = name;
+        LatestEntityDict[id].nameDirty = true;
+        LatestEntityDict[id].apples = apples;
+        LatestEntityDict[id].applesDirty = true;
+    }
 }

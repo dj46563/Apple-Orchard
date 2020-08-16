@@ -2,13 +2,22 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Security.Cryptography;
+using System.Text;
 using UnityEngine;
 using BitStream = BitStreams.BitStream;
 public class NetworkEntity2
 {
+    public static event Action<ushort, string> EntityNameUpdate;
+    public static event Action<ushort, ushort> EntityApplesUpdate;
+    
     public ushort id;
     private NetworkedPosition _position;
     private NetworkedRotation _rotation;
+    // TODO: Create dirty property templated class
+    public bool nameDirty;
+    public string name;
+    public bool applesDirty;
+    public ushort apples;
 
     public NetworkEntity2()
     {
@@ -30,21 +39,40 @@ public class NetworkEntity2
 
     public void Serialize(BitStream stream, bool full)
     {
+        stream.SetEncoding(Encoding.UTF8);
+        
         stream.WriteUInt16(id);
 
         if (full)
         {
             _position.SetDirty();
             _rotation.SetDirty();
+            nameDirty = true;
+            applesDirty = true;
         }
         
         _position.Serialize(stream);
         _rotation.Serialize(stream);
+        
+        stream.WriteBit(nameDirty);
+        if (nameDirty)
+        {
+            stream.WriteByte((byte)name.Length);
+            stream.WriteString(name);
+            nameDirty = false;
+        }
+        stream.WriteBit(applesDirty);
+        if (applesDirty)
+        {
+            stream.WriteUInt16(apples);
+            applesDirty = false;
+        }   
     }
 
     public static NetworkEntity2 Deserialize(BitStream stream)
     {
         ushort id = stream.ReadUInt16();
+        stream.SetEncoding(Encoding.UTF8);
 
         NetworkEntity2 baseEntity;
         baseEntity = NetworkState.LatestEntityDict.ContainsKey(id) ? NetworkState.LatestEntityDict[id] : new NetworkEntity2();
@@ -54,6 +82,26 @@ public class NetworkEntity2
             _position = NetworkedPosition.Deserialize(stream, baseEntity._position),
             _rotation = NetworkedRotation.Deserialize(stream, baseEntity._rotation)
         };
+
+        bool nameDirty = stream.ReadBit();
+        networkEntity.nameDirty = nameDirty;
+        if (nameDirty)
+        {
+            byte length = stream.ReadByte();
+            string name = stream.ReadString(length);
+            networkEntity.name = name;
+            EntityNameUpdate?.Invoke(id, name);
+        }
+
+        bool applesDirty = stream.ReadBit();
+        networkEntity.applesDirty = applesDirty;
+        if (applesDirty)
+        {
+            ushort apples = stream.ReadUInt16();
+            networkEntity.apples = apples;
+            EntityApplesUpdate?.Invoke(id, apples);
+        }
+            
 
         return networkEntity;
     }

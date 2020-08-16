@@ -7,10 +7,19 @@ public class TreeBehavior : MonoBehaviour
 {
     // Called by trees when an apple is picked, first arg is tree id, second is apple id
     public static event Action<byte, byte> ApplePicked;
-    public static TreeBehavior[] Trees { get; private set; } = new TreeBehavior[ushort.MaxValue];
+    public static TreeBehavior[] Trees { get; private set; }
     
     [SerializeField] private AppleBehavior[] apples;
     public byte _treeId;
+
+    // The first tree to run initializes the static tree array
+    private void Awake()
+    {
+        if (Trees == null)
+        {
+            Trees = new TreeBehavior[transform.parent.childCount];
+        }
+    }
 
     // Start is called before the first frame update
     void Start()
@@ -36,5 +45,26 @@ public class TreeBehavior : MonoBehaviour
     public void HideApple(byte appleId)
     {
         apples[appleId].gameObject.SetActive(false);
+    }
+
+    public void SetApples(byte bitMask)
+    {
+        for (int i = 0; i < 4; i++)
+        {
+            if ((bitMask & 1 << i) == 0)
+                apples[i].gameObject.SetActive(false);
+        }
+    }
+
+    public byte GetAppleMask()
+    {
+        byte mask = 0;
+        for (int i = 0; i < 4; i++)
+        {
+            if (apples[i].gameObject.activeInHierarchy)
+                mask |= (byte)(1 << i);
+        }
+
+        return mask;
     }
 }

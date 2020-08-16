@@ -6,6 +6,7 @@ using System.Threading;
 using UnityEngine;
 using ENet;
 using K4os.Compression.LZ4;
+using BitStream = BitStreams.BitStream;
 using EventType = ENet.EventType;
 
 public class Client
@@ -25,19 +26,23 @@ public class Client
 
     private ushort _packetCount = 0;
 
-    public void Connect(string host, ushort port, uint playerId)
+    public void Connect(string host, ushort port, ConnectData connectData)
     {
         _address.Port = port;
         _address.SetHost(host);
         _client.Create();
+
+        byte[] serializedConnectData = connectData.Serialize();
+        Connected += () => SendBytes(serializedConnectData, true);
         
-        _peer = _client.Connect(_address, Constants.ChannelLimit, playerId);
+        _peer = _client.Connect(_address, Constants.ChannelLimit);
     }
 
-    public void SendBytes(byte[] data)
+    public void SendBytes(byte[] data, bool reliable = false)
     {
+        PacketFlags flags = reliable ? PacketFlags.Reliable : PacketFlags.None;
         Packet packet = default(Packet);
-        packet.Create(data);
+        packet.Create(data, flags);
         _peer.Send(0, ref packet);
         
         PacketSent?.Invoke(data);
@@ -90,12 +95,45 @@ public class Client
     {
         _client.Flush();
         _peer.DisconnectNow(0);
-        //while (_peer.State == PeerState.Disconnecting && _peer.State != PeerState.Disconnected) { }
         _client.Dispose();
     }
 
     public uint GetRTT()
     {
         return _peer.RoundTripTime;
+    }
+    
+    public class ConnectData
+    {
+        public string hash;
+
+        public ConnectData(string hash)
+        {
+            this.hash = hash;
+        }
+
+        public byte[] Serialize()
+        {
+            byte[] data = new byte[hash.Length];
+            BitStream stream = new BitStream(data) {AutoIncreaseStream = true};
+            stream.SetEncoding(Encoding.UTF8);
+            
+            // Write the length of the string followed by the string
+            stream.WriteByte((byte)hash.Length);
+            stream.WriteString(hash);
+            return stream.GetStreamData();
+        }
+
+        public static ConnectData Deserialize(byte[] data)
+        {
+            BitStream stream = new BitStream(data);
+            stream.SetEncoding(Encoding.UTF8);
+
+            byte length = stream.ReadByte();
+
+            string hash = stream.ReadString(length);
+            ConnectData connectData = new ConnectData(hash);
+            return connectData;
+        }
     }
 }

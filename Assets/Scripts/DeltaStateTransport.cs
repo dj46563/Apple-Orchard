@@ -79,14 +79,15 @@ public class DeltaStateTransport : MonoBehaviour
         PlayerEntities[index] = updatedEntity;
     }
 
-    public void StartClient(uint playerId)
+    public void StartClient(string playerHash)
     {
         Client = new Client();
         Client.PacketReceived += ClientOnPacketReceived;
 
         latestDiff = default(DiffState); // Dummy value, latest diff will be replaced by the next received state packet
         
-        Client.Connect(Constants.DefaultRemoteHost, Constants.DefaultPort, playerId);
+        Client.ConnectData connectData = new Client.ConnectData(playerHash);
+        Client.Connect(Constants.DefaultRemoteHost, Constants.DefaultPort, connectData);
     }
 
     private void ClientOnPacketReceived(byte[] data)
@@ -110,7 +111,7 @@ public class DeltaStateTransport : MonoBehaviour
     {
         _peerAck.Remove(peerId);
     }
-    private void ServerOnPeerConnected(uint peerId)
+    private void ServerOnPeerConnected(uint peerId, Client.ConnectData connectData)
     {
         _peerAck[peerId] = 0;
         
