@@ -22,6 +22,8 @@ public class ClientInput : MonoBehaviour
         get => _clientInputs;
     }
 
+    private Vector3 _targetPosition;
+    private float lerpT = 0;
 
     private CharacterController _cc;
     
@@ -42,6 +44,8 @@ public class ClientInput : MonoBehaviour
         // Initialize camera and match its rotation to the player
         _cameraTransform = GameController.PlayerCamera.transform;
         _cameraTransform.rotation = _transform.rotation;
+
+        _targetPosition = _transform.position;
         
         DirtyStateTransport.PreClientInputSend += DirtyStateTransportOnPreClientInputSend;
         DirtyStateTransport.PostClientInputSend += DirtyStateTransportOnPostClientInputSend;
@@ -77,13 +81,16 @@ public class ClientInput : MonoBehaviour
         // Change the direction that the client moves
         int horizontal = (_clientInputs.D ? 1 : 0) - (_clientInputs.A ? 1 : 0);
         int vertical = (_clientInputs.W ? 1 : 0) - (_clientInputs.S ? 1 : 0);
-        _delta = _transform.rotation * new Vector3(horizontal, 0, vertical);
+        _delta = _transform.rotation * new Vector3(horizontal, 0, vertical) / DirtyStateTransport.InputSendRate;
+        _targetPosition = _transform.position + _delta;
+        lerpT = 0;
 
         // Record the position of the player and the state we received from the server into a circular buffer
         // Once the server state (stateId) changes, it goes into a new spot in the buffer
         // and the position stored in the circular buffer will represent where we predicted our client
         // should be based on the inputs we've captured
         InputState inputState;
+        // Add 1 to the state id, this is because we are translating from state Id, so it is a new state
         inputState.id = stateId;
         inputState.position = transform.position;
         // It is possible the server state hasn't changed, in this case, overwrite the input state record
@@ -118,7 +125,8 @@ public class ClientInput : MonoBehaviour
         // Move in the direction decided by DirtyStateTransportOnPreClientInputSend
         // It is a combination of all the keys the owner has pressed for this input window
         // And the direction they were facing when the function was called
-        _cc.Move(_delta * Time.deltaTime);
+        lerpT += Time.deltaTime * DirtyStateTransport.InputSendRate;
+        _cc.Move(Vector3.Lerp(_targetPosition - _delta, _targetPosition, lerpT) - _transform.position);
         
         // Collect inputs for DirtyStateTransportOnPreClientInputSend
         if (Input.GetKey(KeyCode.W))
