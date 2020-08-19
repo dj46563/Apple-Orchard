@@ -42,7 +42,9 @@ public class DirtyStateTransport : MonoBehaviour
 
     // SERVER ONLY
     // Keeps track of the last input packet that each client sent
-    private Dictionary<ushort, ClientInputRecord> ClientInputHistory = new Dictionary<ushort, ClientInputRecord>();
+    private Dictionary<ushort, InputPacket> _clientInputHistory = new Dictionary<ushort, InputPacket>();
+    // Keeps track of the last delta that we've calculated for this client
+    private Dictionary<ushort, Vector3> _clientDeltaHistory = new Dictionary<ushort, Vector3>();
     // Keeps track of whos apple counts need to be updated in the database, key is the network id, value is the name and apples
     private Dictionary<ushort, Tuple<string, ushort>> ApplePickers = new Dictionary<ushort, Tuple<string, ushort>>();
     // Keeps track of all the apple pickings and spawnings, is reset after it is sent out
@@ -65,6 +67,7 @@ public class DirtyStateTransport : MonoBehaviour
         Server.PacketReceived += ServerOnPacketReceived;
         
         TreeBehavior.ApplePicked += TreeBehaviorOnApplePicked;
+        NetworkEntity2.EntityApplesUpdate += UpdateNetworkEntityNametag;
         
         Server.Listen(Constants.DefaultPort);
     }
@@ -86,47 +89,54 @@ public class DirtyStateTransport : MonoBehaviour
         // If we detect there was a gap in packets, double, etc
         int multiplier = 0;
         
-        InputPacket inputPacket = InputPacket.Deserialize(data, ClientInputHistory[(ushort)senderId]);
+        InputPacket inputPacket = InputPacket.Deserialize(data, _clientInputHistory[(ushort)senderId]);
         InputCompressor.Inputs inputs = InputCompressor.DecompressInput(inputPacket.inputByte);
 
         Transform ownerTransform = NetworkedObjects[(ushort) senderId].transform;
 
-        // Check it against the client input history
-        if (ClientInputHistory.ContainsKey((ushort) senderId))
+        // EARLY RETURN if this packet is older than another input packet that we've received
+        if (inputPacket.id <= _clientInputHistory[(ushort) senderId].id)
         {
-            // Check to see if this input is newer than the newest one we know of
-            if (inputPacket.id > ClientInputHistory[(ushort) senderId].packetId)
-            {
-                multiplier = inputPacket.id - ClientInputHistory[(ushort) senderId].packetId;
-                
-                // Put the record into the dictionary
-                ClientInputRecord inputRecord;
-                inputRecord.packetId = inputPacket.id;
-                inputRecord.inputs = inputs;
-                inputRecord.rotation = inputPacket.rotation;
-                ClientInputHistory[(ushort) senderId] = inputRecord;
-            }
-            else
-            {
-                multiplier = 0;
-                Debug.Log("Server received out of order client input packet");
-            }
-        }
-        else
-        {
-            multiplier = 1;
-            
-            // Put the record into the dictionary
-            ClientInputRecord inputRecord;
-            inputRecord.packetId = inputPacket.id;
-            inputRecord.inputs = inputs;
-            inputRecord.rotation = inputPacket.rotation;
-            ClientInputHistory[(ushort) senderId] = inputRecord;
+            return;
         }
         
-        // GAME LOGIC BEGIN, MOVE TO NEW AREA LATER
-        int horizontal = Convert.ToSByte(inputs.D) - Convert.ToSByte(inputs.A);
-        int vertical = Convert.ToSByte(inputs.W) - Convert.ToSByte(inputs.S);
+        multiplier = inputPacket.id - _clientInputHistory[(ushort) senderId].id;
+        _clientInputHistory[(ushort) senderId] = inputPacket;
+
+        // // Check it against the client input history
+        // if (ClientInputHistory.ContainsKey((ushort) senderId))
+        // {
+        //     // Check to see if this input is newer than the newest one we know of
+        //     if (inputPacket.id > ClientInputHistory[(ushort) senderId].packetId)
+        //     {
+        //         multiplier = inputPacket.id - ClientInputHistory[(ushort) senderId].packetId;
+        //         
+        //         // Put the record into the dictionary
+        //         ClientInputRecord inputRecord;
+        //         inputRecord.packetId = inputPacket.id;
+        //         inputRecord.inputs = inputs;
+        //         inputRecord.rotation = inputPacket.rotation;
+        //         ClientInputHistory[(ushort) senderId] = inputRecord;
+        //     }
+        //     else
+        //     {
+        //         multiplier = 0;
+        //         Debug.Log("Server received out of order client input packet");
+        //     }
+        // }
+        // else
+        // {
+        //     multiplier = 1;
+        //     
+        //     // Put the record into the dictionary
+        //     ClientInputRecord inputRecord;
+        //     inputRecord.packetId = inputPacket.id;
+        //     inputRecord.inputs = inputs;
+        //     inputRecord.rotation = inputPacket.rotation;
+        //     ClientInputHistory[(ushort) senderId] = inputRecord;
+        // }
+        
+        
         // update state
         NetworkEntity2 entity = NetworkState.LatestEntityDict[(ushort)senderId];
 
@@ -135,14 +145,19 @@ public class DirtyStateTransport : MonoBehaviour
             entity.Rotation = inputPacket.rotation;
         }
 
-        // Full up and down rotations are passed, we only want to transform our inputs by the y axis of the rotation
-        Quaternion yRotation = Quaternion.Euler(0, entity.Rotation.eulerAngles.y, 0);
-        // Calculate the delta of their position
-        Vector3 delta = yRotation * new Vector3(horizontal, 0, vertical) * multiplier * (1 / InputSendRate);
+        CharacterController cc = NetworkedObjects[(ushort) senderId].GetComponent<CharacterController>();
+        Vector3 previousDelta = _clientDeltaHistory.ContainsKey((ushort) senderId)
+            ? _clientDeltaHistory[(ushort) senderId]
+            : Vector3.zero;
+        // Calculate the new delta of their position with the inputs the client has sent us
+        Vector3 delta = MovementLogic.CalculateDelta(inputs, entity.Rotation, previousDelta, cc.isGrounded);
+        
         // Move in that direction while simulating collisions
-        NetworkedObjects[(ushort) senderId].GetComponent<CharacterController>().Move(delta);
+        cc.Move(delta);
         // Update the NetworkState to this new position
         entity.Position = ownerTransform.position;
+
+        _clientDeltaHistory[(ushort) senderId] = delta;
         
         // If E was used, raycast for interactions
         if (inputs.E)
@@ -157,6 +172,7 @@ public class DirtyStateTransport : MonoBehaviour
                     ushort applesPicked = NetworkState.EntityPickedApple((ushort)senderId);
                     apple.Use();
                     ApplePickers[(ushort)senderId] = new Tuple<string, ushort>(EntityNames[(ushort)senderId], applesPicked);
+                    UpdateNetworkEntityNametag((ushort)senderId, applesPicked);
                 }
             }
         }
@@ -173,7 +189,7 @@ public class DirtyStateTransport : MonoBehaviour
         Destroy(NetworkedObjects[(ushort)id]);
         NetworkedObjects.Remove((ushort) id);
         // Unregister from client input history
-        ClientInputHistory.Remove((ushort) id);
+        _clientInputHistory.Remove((ushort) id);
         
         NetworkState.LatestEntityDict.Remove((ushort)id);
     }
@@ -221,7 +237,7 @@ public class DirtyStateTransport : MonoBehaviour
             InitialAppleState initialAppleState;
             Server.BroadcastBytesTo(initialAppleState.Serialize(), id);
         
-            ClientInputHistory[(ushort)id] = ClientInputRecord.InitialRecord();
+            _clientInputHistory[(ushort)id] = InputPacket.InitialPacket();
             EntityNames[(ushort) id] = info.username;
         });
     }
@@ -231,28 +247,15 @@ public class DirtyStateTransport : MonoBehaviour
         Client = new Client();
         Client.PacketReceived += ClientOnPacketReceived;
         
-        NetworkEntity2.EntityApplesUpdate += NetworkEntity2OnEntityApplesUpdate;
-        NetworkEntity2.EntityNameUpdate += NetworkEntity2OnEntityNameUpdate;
+        NetworkEntity2.EntityApplesUpdate += UpdateNetworkEntityNametag;
         
         Client.Connect(host, Constants.DefaultPort, connectData);
     }
 
-    private void NetworkEntity2OnEntityNameUpdate(ushort id, string name)
+    private void UpdateNetworkEntityNametag(ushort id, ushort apples)
     {
-        EntityNames[id] = name;
-        if (!EntityApples.ContainsKey(id))
-            EntityApples[id] = 0;
         if (NetworkedObjects.ContainsKey(id))
-            NetworkedObjects[id].GetComponentInChildren<TextMesh>().text = name + ": " + EntityApples[id];
-    }
-    
-    private void NetworkEntity2OnEntityApplesUpdate(ushort id, ushort apples)
-    {
-        EntityApples[id] = apples;
-        if (!EntityNames.ContainsKey(id))
-            EntityNames[id] = "";
-        if (NetworkedObjects.ContainsKey(id))
-            NetworkedObjects[id].GetComponentInChildren<TextMesh>().text = EntityNames[id] + ": " + apples;
+            NetworkedObjects[id].GetComponentInChildren<TextMesh>().text = NetworkState.LatestEntityDict[id].name + ": " + NetworkState.LatestEntityDict[id].apples;
     }
 
     private void ClientOnPacketReceived(byte[] data)
@@ -269,10 +272,12 @@ public class DirtyStateTransport : MonoBehaviour
                 
                 // Grab the new position of this client's entity and invoke the event to validate client side prediction
                 Vector3 clientOwnedPosition = NetworkState.LatestEntityDict[_clientOwnedId].Position;
-                ServerPositionReceived?.Invoke(id, clientOwnedPosition);
+                ushort lastClientId = StatePacket.GetLastClientPacketId(data);
+                ServerPositionReceived?.Invoke(lastClientId, clientOwnedPosition);
                 LerpT = 0;
                 break;
             case StatePacket.PacketType.InitialState:
+                Debug.Log("Initial packet");
                 _clientOwnedId = StatePacket.GetClientId(data);
                 
                 StatePacket.UpdateNetworkState(0, data);
@@ -382,13 +387,27 @@ public class DirtyStateTransport : MonoBehaviour
             {
                 _timer = 0;
 
-                StatePacket statePacket = new StatePacket();
-                statePacket.packetType = StatePacket.PacketType.State;
-                statePacket.id = currentPacketId++;
-                Server.BroadcastBytes(statePacket.Serialize());
+                // Individually send each client the network state, because the lastClientPacketId
+                // is unique
+                foreach (var networkedObject in NetworkedObjects)
+                {
+                    StatePacket statePacket = new StatePacket();
+                    statePacket.packetType = StatePacket.PacketType.State;
+                    statePacket.id = currentPacketId;
+                    statePacket.lastClientPacketId = _clientInputHistory[networkedObject.Key].id;
+                    Server.BroadcastBytesTo(statePacket.Serialize(), networkedObject.Key);
+                }
+                currentPacketId++;
+
+                // Send the state to all network id's in networkedObjects, entries in this dictionary
+                // are garunteed to have received an initial state
+                // StatePacket statePacket = new StatePacket();
+                // statePacket.packetType = StatePacket.PacketType.State;
+                // statePacket.id = currentPacketId++;
+                // Server.BroadcastBytesTo(statePacket.Serialize(), NetworkedObjects.Keys);
                 
-                // Tell everyone the apple state changes we have collected then reset
-                Server.BroadcastBytes(_appleState.Serialize());
+                // Tell everyone the apple state changes we have collected, then reset
+                Server.BroadcastBytesTo(_appleState.Serialize(), NetworkedObjects.Keys);
                 _appleState = AppleState.InitialPacket();
             }
         }
@@ -399,7 +418,7 @@ public class DirtyStateTransport : MonoBehaviour
                 _timer = 0;
 
                 // Client side prediction
-                PreClientInputSend?.Invoke(latestPacketReceived);
+                PreClientInputSend?.Invoke(currentPacketId);
                 
                 // Grab the inputs recorder by Client input and send them
                 InputCompressor.Inputs inputs = _clientOwnedObject.GetComponent<ClientInput>().ClientInputs;
@@ -411,7 +430,7 @@ public class DirtyStateTransport : MonoBehaviour
                 // Keep this packet so we can tell if there was a rotation change next time we make a packet
                 _previousInputPacket = inputPacket;
                 
-                PostClientInputSend?.Invoke(latestPacketReceived);
+                PostClientInputSend?.Invoke(currentPacketId);
 
                 // DISABLED FOR CLIENT SIDE PREDICTION
                 // InputPacket inputPacket = InputPacket.ComposePacket(currentPacketId++);
@@ -436,6 +455,9 @@ public class DirtyStateTransport : MonoBehaviour
 
         public PacketType packetType;
         public ushort id;
+
+        // used so client can validate its client side predictions
+        public ushort lastClientPacketId;
         // Only used for Initial state packet, it is the peer ID of the client
         public ushort clientId;
 
@@ -450,6 +472,7 @@ public class DirtyStateTransport : MonoBehaviour
             switch (packetType)
             {
                 case PacketType.State:
+                    stream.WriteUInt16(lastClientPacketId);
                     NetworkState.Serialize(stream);
                     break;
                 case PacketType.InitialState:
@@ -477,6 +500,13 @@ public class DirtyStateTransport : MonoBehaviour
             return BitConverter.ToUInt16(data, 1);
         }
 
+        // For state packets
+        public static ushort GetLastClientPacketId(byte[] data)
+        {
+            return BitConverter.ToUInt16(data, 3);
+        }
+
+        // For initial packets
         public static ushort GetClientId(byte[] data)
         {
             return BitConverter.ToUInt16(data, 3);
@@ -507,6 +537,8 @@ public class DirtyStateTransport : MonoBehaviour
             // with different data
             if (packetType == PacketType.InitialState)
                 stream.ReadUInt16();
+            if (packetType == PacketType.State)
+                stream.ReadUInt16();
             
             if (id > latestPacket)
             {
@@ -533,7 +565,7 @@ public class DirtyStateTransport : MonoBehaviour
             return inputPacket;
         }
 
-        public static InputPacket Deserialize(byte[] data, ClientInputRecord old)
+        public static InputPacket Deserialize(byte[] data, InputPacket old)
         {
             InputPacket returnPacket;
             BitStream stream = new BitStream(data);
@@ -597,23 +629,6 @@ public class DirtyStateTransport : MonoBehaviour
             inputPacket.dirtyRotation = false;
             inputPacket.rotation = rotation;
             return inputPacket;
-        }
-    }
-
-    private struct ClientInputRecord
-    {
-        public ushort packetId;
-        public InputCompressor.Inputs inputs;
-        public Quaternion rotation;
-
-        public static ClientInputRecord InitialRecord()
-        {
-            ClientInputRecord record;
-            record.packetId = 0;
-            record.inputs = new InputCompressor.Inputs();
-            record.rotation = Quaternion.identity;
-
-            return record;
         }
     }
 

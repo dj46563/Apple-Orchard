@@ -18,6 +18,8 @@ public class LoginUIController : MonoBehaviour
     private bool _usernameValid = false;
     private bool _passwordValid = false;
 
+    private bool _loginSelected = true;
+
     // Start is called before the first frame update
     void Start()
     {
@@ -28,6 +30,8 @@ public class LoginUIController : MonoBehaviour
         _password.onValueChanged.AddListener(ValidatePassword);
         
         SetLoginAndRegisterInteractable(_usernameValid, _passwordValid);
+        
+        _displayName.Select();
     }
 
     private void ValidatePassword(string password)
@@ -115,6 +119,28 @@ public class LoginUIController : MonoBehaviour
                 Debug.Log("Login complete");
                 successEvent.Invoke(username, hash);
             }
+        }
+    }
+
+    private void Update()
+    {
+        if (Input.GetKeyDown(KeyCode.Tab))
+        {
+            if (_loginSelected)
+            {
+                _password.Select();
+                _loginSelected = false;
+            }
+            else
+            {
+                _displayName.Select();
+                _loginSelected = true;
+            }
+        }
+
+        if (Input.GetKeyDown(KeyCode.Return) && LoginButton.interactable)
+        {
+            LoginButton.onClick.Invoke();
         }
     }
 }

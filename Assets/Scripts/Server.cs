@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using ENet;
 using UnityEngine;
@@ -21,6 +22,9 @@ public class Server
 
     private Dictionary<uint, Peer> _peerDict = new Dictionary<uint, Peer>();
     private HashSet<uint> _peersWithoutConnectionData = new HashSet<uint>();
+    
+    // Caches the values of _peerDict, is used whenever a packet is broadcasted, so we cache the operation
+    private Peer[] _connectedPeerCache = new Peer[0];
 
     public void Listen(ushort port, string host = null)
     {
@@ -36,7 +40,7 @@ public class Server
     {
         Packet packet = default(Packet);
         packet.Create(data);
-        _server.Broadcast(0, ref packet);
+        _server.Broadcast(0, ref packet, _connectedPeerCache);
         
         //Debug.Log("All. Raw: " + data.Length);
         
@@ -47,6 +51,19 @@ public class Server
         Packet packet = default(Packet);
         packet.Create(data, PacketFlags.Reliable);
         _server.Broadcast(0, ref packet, new Peer[] { _peerDict[peerId] });
+        
+        return data.Length;
+    }
+    
+    public int BroadcastBytesTo(byte[] data, IEnumerable<ushort> peerIds)
+    {
+        Packet packet = default(Packet);
+        foreach (var peerId in peerIds)
+        {
+            packet.Create(data, PacketFlags.Reliable);
+            _server.Broadcast(0, ref packet, new Peer[] { _peerDict[peerId] });
+            packet.Dispose();
+        }
         
         return data.Length;
     }
@@ -79,12 +96,12 @@ public class Server
                 case EventType.None:
                     break;
                 case EventType.Connect:
-                    _peerDict[_netEvent.Peer.ID] = _netEvent.Peer;
                     _peersWithoutConnectionData.Add(_netEvent.Peer.ID);
                     Debug.Log("Client connected (pre data) - ID: " + _netEvent.Peer.ID + ", IP: " + _netEvent.Peer.IP);
                     break;
                 case EventType.Disconnect:
                     _peerDict.Remove(_netEvent.Peer.ID);
+                    UpdateConnctedPeerChache();
                     PeerDisconncted?.Invoke(_netEvent.Peer.ID);
                     Debug.Log("Client disconnected - ID: " + _netEvent.Peer.ID + ", IP: " + _netEvent.Peer.IP);
                     break;
@@ -100,6 +117,8 @@ public class Server
                         PeerConnected?.Invoke(_netEvent.Peer.ID, connectData);
 
                         _peersWithoutConnectionData.Remove(_netEvent.Peer.ID);
+                        _peerDict[_netEvent.Peer.ID] = _netEvent.Peer;
+                        UpdateConnctedPeerChache();
                     }
                     else
                     {
@@ -109,11 +128,19 @@ public class Server
                 case EventType.Timeout:
                     Debug.Log("Client timed out - IP: " + _netEvent.Peer.IP);
                     PeerDisconncted?.Invoke(_netEvent.Peer.ID);
+                    _peerDict.Remove(_netEvent.Peer.ID);
+                    UpdateConnctedPeerChache();
                     break;
                 default:
                     break;
             }
         }
+    }
+
+    // Used whenever a key is added or removed to _peerDict
+    private void UpdateConnctedPeerChache()
+    {
+        _connectedPeerCache = _peerDict.Values.ToArray();
     }
 
     public void Disconnect()

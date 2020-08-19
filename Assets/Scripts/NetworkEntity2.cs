@@ -7,7 +7,6 @@ using UnityEngine;
 using BitStream = BitStreams.BitStream;
 public class NetworkEntity2
 {
-    public static event Action<ushort, string> EntityNameUpdate;
     public static event Action<ushort, ushort> EntityApplesUpdate;
     
     public ushort id;
@@ -90,7 +89,6 @@ public class NetworkEntity2
             byte length = stream.ReadByte();
             string name = stream.ReadString(length);
             networkEntity.name = name;
-            EntityNameUpdate?.Invoke(id, name);
         }
 
         bool applesDirty = stream.ReadBit();

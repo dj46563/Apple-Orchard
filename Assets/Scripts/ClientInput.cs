@@ -7,35 +7,36 @@ using Inputs = InputCompressor.Inputs;
 
 public class ClientInput : MonoBehaviour
 {
-    private const int InputStateBufferSize = 10;
     private const float AcceptablePredictionErrorDistance = 0.02f;
 
     private Transform _cameraTransform;
     private Transform _transform;
     
     private Inputs _clientInputs;
-
-    private Vector3 _delta;
+    
     // Accessed by dirty state transport to send to the server what inputs the client has pressed
     public Inputs ClientInputs
     {
         get => _clientInputs;
     }
 
-    private Vector3 _targetPosition;
+    private Vector3 oldPosition;
     private float lerpT = 0;
 
     private CharacterController _cc;
+    private Vector3 _pastDelta = Vector3.zero;
     
-    // Stores a history of the positions we predicted for the owner for recent
-    // server states
-    private CircularBuffer<InputState> _inputStates;
+    private LinkedList<InputState> _inputStates = new LinkedList<InputState>();
+
+    private bool correctDesync = false;
+    private Vector3 correction;
 
     // Records the predicted position made on a client for each state
     struct InputState
     {
         public ushort id;
-        public Vector3 position;
+        public Vector3 preMovePosition;
+        public Vector3 delta;
     }
 
     private void Awake()
@@ -45,59 +46,86 @@ public class ClientInput : MonoBehaviour
         _cameraTransform = GameController.PlayerCamera.transform;
         _cameraTransform.rotation = _transform.rotation;
 
-        _targetPosition = _transform.position;
+        oldPosition = _transform.position;
         
         DirtyStateTransport.PreClientInputSend += DirtyStateTransportOnPreClientInputSend;
         DirtyStateTransport.PostClientInputSend += DirtyStateTransportOnPostClientInputSend;
         DirtyStateTransport.ServerPositionReceived += DirtyStateTransportOnServerPositionReceived;
-        
-        _inputStates = new CircularBuffer<InputState>(InputStateBufferSize);
     }
 
-    private void DirtyStateTransportOnServerPositionReceived(ushort stateId, Vector3 serverPosition)
+    private void DirtyStateTransportOnServerPositionReceived(ushort inputPacketId, Vector3 serverPosition)
     {
-        // Search for the owner's predicted state in the circular buffer that has a matching stateId
-        // Calculate the distance between what the server says the position should be and the actual
-        // position and decide if the distance is big enough to declare a desync
-        int bufferSize = _inputStates.Size;
-        for (int i = 0; i < bufferSize; i++)
+        // Look for a matching InputState, once a matching input state is found, set recentlyFound
+        // When recently found is set, the next item's position will be compared to the server's
+        // If it is different, there is a desync, set accumulate
+        // If it is the same, we're good
+        // When accumulate is set, we add up all of the deltas caused by the next inputs
+        bool recentlyFound = false;
+        bool found = false;
+        int index = 0;
+        int foundIndex = 0;
+        foreach (var inputState in _inputStates)
         {
-            if (_inputStates[i].id == stateId)
+            if (recentlyFound)
             {
-                float distance = Vector3.Distance(serverPosition, _inputStates[i].position);
-                bool desync = distance > AcceptablePredictionErrorDistance;
+                recentlyFound = false;
                 
-                // TODO: Correct the desync
-                if (desync)
-                    Debug.Log("Desync! Client: " + _inputStates[i].position + ", Server: " + serverPosition + ", Distance: " + distance);
+                if ((serverPosition - inputState.preMovePosition).magnitude > AcceptablePredictionErrorDistance)
+                {
+                    // Desync
+                    correctDesync = true;
+                    correction = serverPosition - inputState.preMovePosition;
+                    Debug.Log("Desync mag: " + (serverPosition - inputState.preMovePosition).magnitude);
+                }
+            }
 
-                break;
+            if (!found)
+            {
+                if (inputState.id == inputPacketId)
+                {
+                    recentlyFound = true;
+                    found = true;
+                    foundIndex = index;
+                }
+            }
+
+            index++;
+        }
+
+        // Remove input states that were before the matching input state
+        if (found)
+        {
+            for (int i = 0; i < foundIndex; i++)
+            {
+                _inputStates.RemoveFirst();
             }
         }
     }
 
-    private void DirtyStateTransportOnPreClientInputSend(ushort stateId)
+    private void DirtyStateTransportOnPreClientInputSend(ushort currentPacketId)
     {
-        // Change the direction that the client moves
-        int horizontal = (_clientInputs.D ? 1 : 0) - (_clientInputs.A ? 1 : 0);
-        int vertical = (_clientInputs.W ? 1 : 0) - (_clientInputs.S ? 1 : 0);
-        _delta = _transform.rotation * new Vector3(horizontal, 0, vertical) / DirtyStateTransport.InputSendRate;
-        _targetPosition = _transform.position + _delta;
-        lerpT = 0;
+        Vector3 delta = MovementLogic.CalculateDelta(_clientInputs, _cameraTransform.rotation, _pastDelta, _cc.isGrounded);
+        _pastDelta = delta;
 
-        // Record the position of the player and the state we received from the server into a circular buffer
-        // Once the server state (stateId) changes, it goes into a new spot in the buffer
-        // and the position stored in the circular buffer will represent where we predicted our client
-        // should be based on the inputs we've captured
+        // Record the packetId of we client input packet we are about to send, the keys we are sending, and the position
+        // the client is at before they have been moved by these inputs
         InputState inputState;
-        // Add 1 to the state id, this is because we are translating from state Id, so it is a new state
-        inputState.id = stateId;
-        inputState.position = transform.position;
-        // It is possible the server state hasn't changed, in this case, overwrite the input state record
-        if (!_inputStates.IsEmpty && _inputStates.Front().id == stateId)
-            _inputStates[0] = inputState;
+        inputState.id = currentPacketId;
+        inputState.delta = delta;
+        inputState.preMovePosition = transform.position;
+        _inputStates.AddLast(inputState);
+
+        oldPosition = _transform.position;
+
+        if (correctDesync)
+        {
+            _cc.Move(delta + correction);
+            correctDesync = false;
+        }
         else
-            _inputStates.PushFront(inputState);
+            _cc.Move(delta);
+
+        lerpT = 0;
     }
 
     private void DirtyStateTransportOnPostClientInputSend(ushort obj)
@@ -122,12 +150,6 @@ public class ClientInput : MonoBehaviour
         if (!Application.isFocused)
             return;
 
-        // Move in the direction decided by DirtyStateTransportOnPreClientInputSend
-        // It is a combination of all the keys the owner has pressed for this input window
-        // And the direction they were facing when the function was called
-        lerpT += Time.deltaTime * DirtyStateTransport.InputSendRate;
-        _cc.Move(Vector3.Lerp(_targetPosition - _delta, _targetPosition, lerpT) - _transform.position);
-        
         // Collect inputs for DirtyStateTransportOnPreClientInputSend
         if (Input.GetKey(KeyCode.W))
             _clientInputs.W = true;
@@ -141,13 +163,11 @@ public class ClientInput : MonoBehaviour
             _clientInputs.Space = true;
         if (Input.GetKey(KeyCode.E))
             _clientInputs.E = true;
-        
-        
-        // Rotate the player model based on mouse movement
-        _transform.Rotate(Vector3.up, Input.GetAxis("Mouse X"), Space.World);
-        
+
         // Update camera position
-        _cameraTransform.position = _transform.position + Vector3.up;
+        lerpT += Time.deltaTime * DirtyStateTransport.InputSendRate;
+        _cameraTransform.position = Vector3.Lerp(oldPosition + Vector3.up, transform.position + Vector3.up, lerpT);
+
         _cameraTransform.Rotate(-Vector3.right, Input.GetAxis("Mouse Y"), Space.Self);
         _cameraTransform.Rotate(Vector3.up, Input.GetAxis("Mouse X"), Space.World);
     }

@@ -1,17 +1,17 @@
 ﻿using System;
+using System.Collections;
 using UnityEngine;
 using UnityEngine.Networking;
 
 namespace Utils
 {
-
     public struct PlayerInfo
     {
         public int id;
         public string username;
         public int apples;
 
-        public static void GetPlayerInfo(string hash, Action<PlayerInfo> callback)
+        public static void GetPlayerInfo(string hash, Action<PlayerInfo> successCallback)
         {
             WWWForm form = new WWWForm();
             form.AddField("hash", hash);
@@ -20,7 +20,7 @@ namespace Utils
             www.SendWebRequest().completed += operation =>
             {
                 PlayerInfo info = JsonUtility.FromJson<PlayerInfo>(www.downloadHandler.text);
-                callback?.Invoke(info);
+                successCallback?.Invoke(info);
             };
         }
     }
