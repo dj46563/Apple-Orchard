@@ -14,4 +14,10 @@ public static class FloatQuantize
     {
         return (float)quantized / (float)factor;
     }
+
+    public static float SimulateQuantize(float f, int factor)
+    {
+        short quantized = QuantizeFloat(f, factor);
+        return UnQunatizeFloat(quantized, factor);
+    }
 }

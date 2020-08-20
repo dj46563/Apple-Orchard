@@ -16,13 +16,14 @@ public class GameController : MonoBehaviour
 
     private string _username;
     private string _playerHash;
+    private Color _color;
     
     // Start is called before the first frame update
     void Awake()
     {
         MenuController.OnHostPressed += Host;
-        MenuController.OnLocalConnectPressed += () => Connect(Constants.DefaultLocalHost, _playerHash);
-        MenuController.OnRemoteConnectPressed += () => Connect(Constants.DefaultRemoteHost, _playerHash);
+        MenuController.OnLocalConnectPressed += () => Connect(Constants.DefaultLocalHost, _playerHash, _color);
+        MenuController.OnRemoteConnectPressed += () => Connect(Constants.DefaultRemoteHost, _playerHash, _color);
 
         _transport = gameObject.AddComponent<DirtyStateTransport>();
         _transport.PlayerPrefab = PlayerPrefab;
@@ -36,15 +37,16 @@ public class GameController : MonoBehaviour
         else
         {
             _sceneController.LoadLoginUI();
-            LoginUIController.OnLoginSuccess += (username, hash) =>
+            LoginUIController.LoginSucceeded += (username, hash, color) =>
             {
                 _playerHash = hash;
                 _username = username;
+                _color = color;
                 
                 _sceneController.UnloadLoginUI();
                 if (Constants.AutoConnect)
                 {
-                    Connect(Constants.DefaultRemoteHost, _playerHash);
+                    Connect(Constants.DefaultRemoteHost, _playerHash, color);
                 }
                 else
                 {
@@ -56,9 +58,9 @@ public class GameController : MonoBehaviour
 
     // TODO: Move this stuff below, into the DeltaStateTransport
 
-    private void Connect(string host, string playerHash)
+    private void Connect(string host, string playerHash, Color color)
     {
-        Client.ConnectData connectData = new Client.ConnectData(playerHash);
+        Client.ConnectData connectData = new Client.ConnectData(playerHash, color);
         _transport.StartClient(host, connectData);
         
         _transport.Client.Connected += () =>

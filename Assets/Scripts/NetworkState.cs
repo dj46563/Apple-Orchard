@@ -12,13 +12,19 @@ public static class NetworkState
     public static Dictionary<ushort, NetworkEntity2> LatestEntityDict { get; set; } = new Dictionary<ushort, NetworkEntity2>();
     public static Dictionary<ushort, NetworkEntity2> PreviousEntityDict { get; set; } = LatestEntityDict;
 
-    public static void Serialize(BitStream stream, bool full = false)
+    public static byte[] Serialize(bool full = false)
     {
+        byte[] data = new byte[1];
+        BitStream stream = new BitStream(data);
+        stream.AutoIncreaseStream = true;
+        
         stream.WriteUInt16((ushort)LatestEntityDict.Count);
         foreach (var entity in LatestEntityDict.Values)
         {
             entity.Serialize(stream, full);
         }
+
+        return stream.GetStreamData();
     }
 
     public static void Deserialize(BitStream stream)

@@ -8,12 +8,14 @@ using UnityEngine.UI;
 public class LoginUIController : MonoBehaviour
 {
     // Raised when login is successful, arguments are the username and the hash
-    public static Action<string, string> OnLoginSuccess;
+    public static Action<string, string, Color> LoginSucceeded;
     
     [SerializeField] private InputField _displayName;
     [SerializeField] private InputField _password;
     [SerializeField] private Button LoginButton;
     [SerializeField] private Button RegisterButton;
+    [SerializeField] private Toggle RemmemberMe;
+    [SerializeField] private FlexibleColorPicker ColorPicker;
 
     private bool _usernameValid = false;
     private bool _passwordValid = false;
@@ -31,7 +33,29 @@ public class LoginUIController : MonoBehaviour
         
         SetLoginAndRegisterInteractable(_usernameValid, _passwordValid);
         
+        LoginSucceeded += OnLoginSuccess;
+        
         _displayName.Select();
+
+        if (PlayerPrefs.HasKey("Username") && PlayerPrefs.HasKey("Password"))
+        {
+            _displayName.text = PlayerPrefs.GetString("Username");
+            _password.text = PlayerPrefs.GetString("Password");
+        }
+    }
+
+    private void OnLoginSuccess(string username, string hash, Color color)
+    {
+        if (RemmemberMe.isOn)
+        {
+            PlayerPrefs.SetString("Username", _displayName.text);
+            PlayerPrefs.SetString("Password", _password.text);
+        }
+        else
+        {
+            PlayerPrefs.DeleteKey("Username");
+            PlayerPrefs.DeleteKey("Password");
+        }
     }
 
     private void ValidatePassword(string password)
@@ -73,7 +97,7 @@ public class LoginUIController : MonoBehaviour
     private void OnLoginClick()
     {
         // Send the HTTP Request
-        StartCoroutine(Login(_displayName.text, _password.text, OnLoginSuccess));
+        StartCoroutine(Login(_displayName.text, _password.text, LoginSucceeded));
     }
 
     private IEnumerator Register(string username, string password)
@@ -98,7 +122,7 @@ public class LoginUIController : MonoBehaviour
         }
     }
 
-    private IEnumerator Login(string username, string password, Action<string, string> successEvent)
+    private IEnumerator Login(string username, string password, Action<string, string, Color> successEvent)
     {
         WWWForm form = new WWWForm();
         form.AddField("username", username);
@@ -117,7 +141,7 @@ public class LoginUIController : MonoBehaviour
             {
                 string hash = www.downloadHandler.text;
                 Debug.Log("Login complete");
-                successEvent.Invoke(username, hash);
+                successEvent.Invoke(username, hash, ColorPicker.color);
             }
         }
     }

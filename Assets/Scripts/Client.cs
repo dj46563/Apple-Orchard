@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using System.Threading;
 using UnityEngine;
@@ -106,10 +107,12 @@ public class Client
     public class ConnectData
     {
         public string hash;
+        public Color color;
 
-        public ConnectData(string hash)
+        public ConnectData(string hash, Color color)
         {
             this.hash = hash;
+            this.color = color;
         }
 
         public byte[] Serialize()
@@ -132,7 +135,7 @@ public class Client
             byte length = stream.ReadByte();
 
             string hash = stream.ReadString(length);
-            ConnectData connectData = new ConnectData(hash);
+            ConnectData connectData = new ConnectData(hash, Color.magenta);
             return connectData;
         }
     }

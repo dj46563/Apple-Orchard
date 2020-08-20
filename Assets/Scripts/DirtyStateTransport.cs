@@ -150,7 +150,7 @@ public class DirtyStateTransport : MonoBehaviour
             ? _clientDeltaHistory[(ushort) senderId]
             : Vector3.zero;
         // Calculate the new delta of their position with the inputs the client has sent us
-        Vector3 delta = MovementLogic.CalculateDelta(inputs, entity.Rotation, previousDelta, cc.isGrounded);
+        Vector3 delta = MovementLogic.CalculateDelta(inputs, entity.Rotation, previousDelta, cc.isGrounded, multiplier);
         
         // Move in that direction while simulating collisions
         cc.Move(delta);
@@ -183,7 +183,7 @@ public class DirtyStateTransport : MonoBehaviour
         StatePacket disconnectPacket = new StatePacket();
         disconnectPacket.packetType = StatePacket.PacketType.Disconnect;
         disconnectPacket.id = (ushort)id;
-        Server.BroadcastBytes(disconnectPacket.Serialize());
+        Server.BroadcastBytes(disconnectPacket.Serialize(null));
         
         // Destroy the networked object
         Destroy(NetworkedObjects[(ushort)id]);
@@ -225,13 +225,14 @@ public class DirtyStateTransport : MonoBehaviour
             connectPacket.id = (ushort)id;
             // Broadcast the connection to all peers except for the peer that is connecting
             // They will receive their Instantiation in their initial state packet
-            Server.BroadcastBytesToEveryoneExcept(connectPacket.Serialize(), id);
+            Server.BroadcastBytesToEveryoneExcept(connectPacket.Serialize(null), id);
 
             StatePacket initialStatePacket = new StatePacket();
             initialStatePacket.packetType = StatePacket.PacketType.InitialState;
             initialStatePacket.id = currentPacketId;
             initialStatePacket.clientId = (ushort) id;
-            Server.BroadcastBytesTo(initialStatePacket.Serialize(), id);
+            byte[] fullNetworkStateBytes = NetworkState.Serialize(true);
+            Server.BroadcastBytesTo(initialStatePacket.Serialize(fullNetworkStateBytes), id);
             
             // Send them the initial apple state, which says for every apple, if it is picked or not
             InitialAppleState initialAppleState;
@@ -255,7 +256,7 @@ public class DirtyStateTransport : MonoBehaviour
     private void UpdateNetworkEntityNametag(ushort id, ushort apples)
     {
         if (NetworkedObjects.ContainsKey(id))
-            NetworkedObjects[id].GetComponentInChildren<TextMesh>().text = NetworkState.LatestEntityDict[id].name + ": " + NetworkState.LatestEntityDict[id].apples;
+            NetworkedObjects[id].GetComponentInChildren<TextMesh>().text = EntityNames[id] + ": " + apples;
     }
 
     private void ClientOnPacketReceived(byte[] data)
@@ -291,7 +292,8 @@ public class DirtyStateTransport : MonoBehaviour
                     {
                         obj.AddComponent<ClientInput>();
                     }
-                    
+
+                    EntityNames[pair.Key] = pair.Value.name;
                     obj.GetComponentInChildren<TextMesh>().text = pair.Value.name + ": " + pair.Value.apples;
                 }
                 
@@ -313,7 +315,8 @@ public class DirtyStateTransport : MonoBehaviour
                 obj = Instantiate(PlayerPrefab);
                 obj.GetComponent<FollowState>().Id = id;
                 NetworkedObjects[id] = obj;
-                
+
+                EntityNames[id] = NetworkState.LatestEntityDict[id].name;
                 // Update their name tag
                 obj.GetComponentInChildren<TextMesh>().text = NetworkState.LatestEntityDict[id].name + ": " + NetworkState.LatestEntityDict[id].apples;
                 break;
@@ -387,6 +390,8 @@ public class DirtyStateTransport : MonoBehaviour
             {
                 _timer = 0;
 
+                // Serialize network state just once, instead of serializing the same data for every client
+                byte[] stateBytes = NetworkState.Serialize();
                 // Individually send each client the network state, because the lastClientPacketId
                 // is unique
                 foreach (var networkedObject in NetworkedObjects)
@@ -395,7 +400,7 @@ public class DirtyStateTransport : MonoBehaviour
                     statePacket.packetType = StatePacket.PacketType.State;
                     statePacket.id = currentPacketId;
                     statePacket.lastClientPacketId = _clientInputHistory[networkedObject.Key].id;
-                    Server.BroadcastBytesTo(statePacket.Serialize(), networkedObject.Key);
+                    Server.BroadcastBytesTo(statePacket.Serialize(stateBytes), networkedObject.Key);
                 }
                 currentPacketId++;
 
@@ -461,7 +466,8 @@ public class DirtyStateTransport : MonoBehaviour
         // Only used for Initial state packet, it is the peer ID of the client
         public ushort clientId;
 
-        public byte[] Serialize()
+        // State data is passed in, to allow for the same state bytes to be sent for multiple serialize calls
+        public byte[] Serialize(byte[] stateData)
         {
             byte[] data = new byte[1]; // The Stream will increase this as needed *lazy...*
             BitStream stream = BitStream.Create(data);
@@ -473,11 +479,11 @@ public class DirtyStateTransport : MonoBehaviour
             {
                 case PacketType.State:
                     stream.WriteUInt16(lastClientPacketId);
-                    NetworkState.Serialize(stream);
+                    stream.WriteBytes(stateData, stateData.Length, true);
                     break;
                 case PacketType.InitialState:
                     stream.WriteUInt16(clientId);
-                    NetworkState.Serialize(stream, true);
+                    stream.WriteBytes(stateData, stateData.Length, true);
                     break;
                 case PacketType.Connect:
                     NetworkEntity2 newEntity = NetworkState.LatestEntityDict[id];
