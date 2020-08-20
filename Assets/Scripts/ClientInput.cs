@@ -7,7 +7,7 @@ using Inputs = InputCompressor.Inputs;
 
 public class ClientInput : MonoBehaviour
 {
-    private const float AcceptablePredictionErrorDistance = 0.02f;
+    private const float AcceptablePredictionErrorDistance = 0.01f;
 
     private Transform _cameraTransform;
     private Transform _transform;
@@ -45,6 +45,7 @@ public class ClientInput : MonoBehaviour
         // Initialize camera and match its rotation to the player
         _cameraTransform = GameController.PlayerCamera.transform;
         _cameraTransform.rotation = _transform.rotation;
+        _cameraTransform.position = _transform.position;
 
         oldPosition = _transform.position;
         
@@ -60,6 +61,7 @@ public class ClientInput : MonoBehaviour
         // If it is different, there is a desync, set accumulate
         // If it is the same, we're good
         // When accumulate is set, we add up all of the deltas caused by the next inputs
+        
         bool recentlyFound = false;
         bool found = false;
         int index = 0;
@@ -69,8 +71,12 @@ public class ClientInput : MonoBehaviour
             if (recentlyFound)
             {
                 recentlyFound = false;
-                
-                if ((serverPosition - inputState.preMovePosition).magnitude > AcceptablePredictionErrorDistance)
+
+                Vector3 quantizedPosition = new Vector3(
+                    FloatQuantize.SimulateQuantize(inputState.preMovePosition.x, NetworkEntity2.PostionFactor),
+                    FloatQuantize.SimulateQuantize(inputState.preMovePosition.y, NetworkEntity2.PostionFactor),
+                    FloatQuantize.SimulateQuantize(inputState.preMovePosition.z, NetworkEntity2.PostionFactor));
+                if ((serverPosition - quantizedPosition).magnitude > AcceptablePredictionErrorDistance)
                 {
                     // Desync
                     correctDesync = true;
@@ -112,7 +118,8 @@ public class ClientInput : MonoBehaviour
         InputState inputState;
         inputState.id = currentPacketId;
         inputState.delta = delta;
-        inputState.preMovePosition = transform.position;
+        // Store the value that would come back after the server compresses the float componenets
+        inputState.preMovePosition = _transform.position;
         _inputStates.AddLast(inputState);
 
         oldPosition = _transform.position;
@@ -123,7 +130,9 @@ public class ClientInput : MonoBehaviour
             correctDesync = false;
         }
         else
+        {
             _cc.Move(delta);
+        }
 
         lerpT = 0;
     }
@@ -165,6 +174,8 @@ public class ClientInput : MonoBehaviour
             _clientInputs.E = true;
 
         // Update camera position
+        //_cameraTransform.position = Vector3.MoveTowards(_cameraTransform.position, transform.position, MovementLogic.Speed * Time.deltaTime);
+        //_cameraTransform.position += (transform.position - _cameraTransform.position).normalized * Time.deltaTime;
         lerpT += Time.deltaTime * DirtyStateTransport.InputSendRate;
         _cameraTransform.position = Vector3.Lerp(oldPosition + Vector3.up, transform.position + Vector3.up, lerpT);
 
