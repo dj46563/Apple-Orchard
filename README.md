@@ -1,5 +1,5 @@
 # Apple-Orchard
-Multiplayer, "from scratch", efficient, high player count, social, apple picking game
+Multiplayer, "from scratch," efficient, high player count, social, apple picking game
 
 All networking is implemented with a low level transport library, [ENet-CSharp](https://github.com/nxrighthere/ENet-CSharp)
 
